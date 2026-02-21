@@ -1,88 +1,78 @@
 // src/security.ts
 
 class InputValidator {
-    // Validates user input to prevent injection attacks
-    public static validate(input: any): boolean {
-        // Implement validation logic
-        return true; // Placeholder
+    validate(input) {
+        // Implement input validation logic here
+        return true;
     }
 }
 
 class SafeTokenMath {
-    // Safely performs mathematical operations on tokens
-    public static safeAdd(a: number, b: number): number {
-        return a + b; // Placeholder
+    safeAdd(a, b) {
+        // Implement safe addition logic
+        return a + b;
+    }
+    safeSubtract(a, b) {
+        // Implement safe subtraction logic
+        return a - b;
     }
 }
 
 class SecureJsonParser {
-    // Parses JSON securely to prevent injection
-    public static parse(input: string): any {
-        return JSON.parse(input); // Placeholder
+    parse(jsonString) {
+        // Securely parse JSON strings
+        return JSON.parse(jsonString);
     }
 }
 
 class SecurityLogger {
-    // Logs security-related events
-    public static log(message: string): void {
-        console.log(message); // Placeholder
+    log(message) {
+        // Implement secure logging of messages
+        console.log(message);
     }
 }
 
 class AuthenticationMiddleware {
-    // Middleware to handle authentication
-    public static authenticate(req: any, res: any, next: any): void {
+    authenticate(req, res, next) {
         // Implement authentication logic
-        next(); // Placeholder
+        next();
     }
 }
 
 class SecurityErrorHandler {
-    // Handles security errors
-    public static handleError(err: Error): void {
-        console.error(err); // Placeholder
+    handleError(err, req, res, next) {
+        // Handle security errors
+        res.status(500).send('Internal Server Error');
     }
 }
 
 class OutputSanitizer {
-    // Sanitizes output to prevent XSS
-    public static sanitize(output: string): string {
-        return output; // Placeholder
+    sanitize(output) {
+        // Implement output sanitization logic
+        return output;
     }
 }
 
 class ImmutableState {
-    // Ensures that state cannot be modified
-    private constructor() {}
-    public static createImmutable<T>(obj: T): T {
-        return Object.freeze(obj); // Placeholder
+    constructor(state) {
+        Object.freeze(state);
     }
 }
 
 class RateLimiter {
-    // Limits the rate of requests
-    private static requests: { [key: string]: number } = {};
-    public static limit(key: string): void {
+    constructor(rate, interval) {
+        this.rate = rate;
+        this.interval = interval;
+    }
+    limit(req, res, next) {
         // Implement rate limiting logic
+        next();
     }
 }
 
 class InputSizeLimiter {
-    // Limits the size of input
-    public static limitSize(input: any, maxSize: number): boolean {
-        return JSON.stringify(input).length <= maxSize; // Placeholder
+    limit(req, res, next) {
+        // Implement input size limiting logic
+        next();
     }
 }
-
-export {
-    InputValidator,
-    SafeTokenMath,
-    SecureJsonParser,
-    SecurityLogger,
-    AuthenticationMiddleware,
-    SecurityErrorHandler,
-    OutputSanitizer,
-    ImmutableState,
-    RateLimiter,
-    InputSizeLimiter
-};

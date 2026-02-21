@@ -1,29 +1,48 @@
-// src/tokenCounter.ts
+import { SafeTokenMath } from './security';
 
-// Function to validate user input
-function validateInput(input: any): boolean {
-    return typeof input === 'number' && input >= 0;
-}
+// Structured logging functions
+import { logInfo, logError } from './logging';
 
-// Safe arithmetic function
-function safeAdd(a: number, b: number): number {
-    if (!validateInput(a) || !validateInput(b)) {
-        throw new Error('Invalid input');
+// Public functions
+export function validateBlogId(blogId) {
+    if (typeof blogId !== 'string' || blogId.trim() === '') {
+        logError('Invalid blogId');
+        throw new Error('Invalid blogId');
     }
-    // Add numbers safely
-    return a + b;
+    return blogId;
 }
 
-// Secure logging function
-function secureLog(message: string): void {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] - ${message}`);
+export function validateTokenCount(tokenCount) {
+    const count = parseInt(tokenCount, 10);
+    if (isNaN(count) || count < 0) {
+        logError('Invalid token count');
+        throw new Error('Invalid token count');
+    }
+    return count;
 }
 
-// Example usage of safe arithmetic
-try {
-    const result = safeAdd(5, 10);
-    secureLog(`The result is: ${result}`);
-} catch (error) {
-    secureLog(`Error: ${error.message}`);
+export function validateDescription(description) {
+    if (typeof description !== 'string' || description.trim() === '') {
+        logError('Invalid description');
+        throw new Error('Invalid description');
+    }
+    return description;
+}
+
+export function processTokens(blogId, tokenCount, description) {
+    try {
+        validateBlogId(blogId);
+        const count = validateTokenCount(tokenCount);
+        const desc = validateDescription(description);
+
+        // Safe arithmetic operations
+        const newTokenCount = SafeTokenMath.add(count, 1);
+
+        logInfo(`Processing tokens for ${blogId}: ${newTokenCount} tokens with description: ${desc}`);
+        // Further processing logic here...
+        return newTokenCount;
+    } catch (error) {
+        logError(`Error processing tokens: ${error.message}`);
+        throw error;
+    }
 }

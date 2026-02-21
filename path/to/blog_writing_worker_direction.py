@@ -1,73 +1,83 @@
-# Consolidated Blog Writing Worker Code
-
-## Module 1: Imports
+# Required Libraries
 import os
 import json
 import requests
-from datetime import datetime
-import html
+import logging
+import re
+from typing import List, Dict, Any
 
-## Module 2: Global Constants
-define_constants():
-    MAX_RETRIES = 5
-    BASE_URL = "https://api.example.com"
+# Constants
+API_KEY = "your_api_key"
+BASE_URL = "https://api.example.com"
 
-## Module 3: Data Models
+# Data Models
 class BlogPost:
-    def __init__(self, title, content):
+    def __init__(self, title: str, content: str):
         self.title = title
         self.content = content
 
-## Module 4: File Loaders
-def load_file(file_path):
+# File Loaders
+def load_file(file_path: str) -> str:
     with open(file_path, 'r') as file:
         return file.read()
 
-## Module 5: LLM Interface
-class LLMInterface:
-    def generate_response(self, prompt):
-        response = requests.post(BASE_URL + '/generate', json={'prompt': prompt})
-        return response.json()['text']
+# LLM Interface
+def call_llm(prompt: str) -> str:
+    response = requests.post(BASE_URL, headers={'Authorization': f'Bearer {API_KEY}'}, json={'prompt': prompt})
+    return response.json().get('response', '')
 
-## Module 6: Web Search and HTML Extraction
-def search_web(query):
-    response = requests.get(f'https://api.search.com?q={query}')
-    return response.text
+# Web Search
+def web_search(query: str) -> List[str]:
+    response = requests.get(f"{BASE_URL}/search", params={'q': query})
+    return response.json().get('results', [])
 
-## Module 7: Prompt Builders
-def build_prompt(blog_title, keywords):
-    return f'Write a blog on {blog_title} with keywords {keywords}'
+# Prompt Builders
+def build_blog_prompt(title: str, context: str) -> str:
+    return f"Write a blog post titled '{title}' based on the following context: {context}" 
 
-## Module 8: Validators
-def validate_input(content):
-    return isinstance(content, str) and len(content) > 0
+# Validators
+def validate_blog_post(post: BlogPost) -> bool:
+    return bool(post.title) and bool(post.content)
 
-## Module 9: Blog Generation Workflow
-def generate_blog(title, keywords):
-    prompt = build_prompt(title, keywords)
-    llm_response = LLMInterface().generate_response(prompt)
-    if validate_input(llm_response):
-        return BlogPost(title, llm_response)
+# Blog Generation
+def generate_blog_post(title: str, context: str) -> BlogPost:
+    prompt = build_blog_prompt(title, context)
+    content = call_llm(prompt)
+    return BlogPost(title, content)
 
-## Module 10: Summary Injection
-def inject_summary(blog_post, summary):
-    blog_post.content += f'\n\nSummary: {summary}'
+# Summary Injection
+def inject_summary(blog_post: BlogPost, summary: str) -> BlogPost:
+    blog_post.content = f"{summary}
 
-## Module 11: HTML Table Insertion
-def insert_html_table(data):
-    html_table = '<table>'
-    for row in data:
-        html_table += '<tr>' + ''.join(f'<td>{cell}</td>' for cell in row) + '</tr>'
-    html_table += '</table>'
-    return html_table
+{blog_post.content}" 
+    return blog_post
 
-## Module 12: Output Sanitization
-def sanitize_output(content):
-    return html.escape(content)
+# HTML Table Insertion
+def insert_html_table(data: List[Dict[str, Any]]) -> str:
+    html = '<table>\n'<thead>\n<tr>'
+    header = data[0].keys()
+    html += ''.join([f'<th>{col}</th>' for col in header]) + '</tr>\n'</thead>\n'<tbody>\n'
+    for item in data:
+        html += '<tr>' + ''.join([f'<td>{item[col]}</td>' for col in header]) + '</tr>\n'
+    html += '</tbody>\n</table>'
+    return html
 
-## Module 13: Main Daily Worker and Entry Point
+# Output Sanitization
+def sanitize_output(output: str) -> str:
+    return re.sub(r'<[^>]*>', '', output)  # Remove HTML tags
+
+# Main Worker
+def main():
+    title = "An Awesome Blog Post"
+    context = load_file('context.txt')
+    blog_post = generate_blog_post(title, context)
+
+    if validate_blog_post(blog_post):
+        summary = "This is a summary of the blog post."
+        blog_post = inject_summary(blog_post, summary)
+        print(sanitize_output(blog_post.content))
+    else:
+        logging.error("Invalid blog post")
+
 if __name__ == '__main__':
-    title = 'Sample Blog Title'
-    keywords = ['keyword1', 'keyword2']
-    blog_post = generate_blog(title, keywords)
-    print(sanitize_output(blog_post.content))
+    main()

@@ -1,48 +1,17 @@
-import { SafeTokenMath } from './security';
+// Sample content with security hardening
 
-// Structured logging functions
-import { logInfo, logError } from './logging';
-
-// Public functions
-export function validateBlogId(blogId) {
-    if (typeof blogId !== 'string' || blogId.trim() === '') {
-        logError('Invalid blogId');
-        throw new Error('Invalid blogId');
+function tokenCounter(input) {
+    // Input validation
+    if (typeof input !== 'number' || input < 0) {
+        throw new Error('Invalid input: input must be a non-negative number.');
     }
-    return blogId;
+
+    // Safe Arithmetic Operations
+    const result = Math.min(input, Number.MAX_SAFE_INTEGER);
+
+    // Secure Logging - Here we log the processed result securely
+    console.log(`Token count processed: ${result}`);
+    return result;
 }
 
-export function validateTokenCount(tokenCount) {
-    const count = parseInt(tokenCount, 10);
-    if (isNaN(count) || count < 0) {
-        logError('Invalid token count');
-        throw new Error('Invalid token count');
-    }
-    return count;
-}
-
-export function validateDescription(description) {
-    if (typeof description !== 'string' || description.trim() === '') {
-        logError('Invalid description');
-        throw new Error('Invalid description');
-    }
-    return description;
-}
-
-export function processTokens(blogId, tokenCount, description) {
-    try {
-        validateBlogId(blogId);
-        const count = validateTokenCount(tokenCount);
-        const desc = validateDescription(description);
-
-        // Safe arithmetic operations
-        const newTokenCount = SafeTokenMath.add(count, 1);
-
-        logInfo(`Processing tokens for ${blogId}: ${newTokenCount} tokens with description: ${desc}`);
-        // Further processing logic here...
-        return newTokenCount;
-    } catch (error) {
-        logError(`Error processing tokens: ${error.message}`);
-        throw error;
-    }
-}
+module.exports = tokenCounter;

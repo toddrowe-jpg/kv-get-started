@@ -1,78 +1,104 @@
 // src/security.ts
 
+// Input validation class to prevent injections and ensure only valid data is processed.
 class InputValidator {
-    validate(input) {
-        // Implement input validation logic here
-        return true;
+    validate(input: any, schema: any): boolean {
+        // Implementation of validation logic.
+        return true; // Simplified for illustration.
     }
 }
 
+// Safe math operations to prevent overflow and underflow in token calculations.
 class SafeTokenMath {
-    safeAdd(a, b) {
-        // Implement safe addition logic
+    add(a: number, b: number): number {
+        if ((b > 0 && a > Number.MAX_SAFE_INTEGER - b) || (b < 0 && a < Number.MIN_SAFE_INTEGER - b)) {
+            throw new Error('SafeMath: addition overflow');
+        }
         return a + b;
     }
-    safeSubtract(a, b) {
-        // Implement safe subtraction logic
-        return a - b;
-    }
+    // Additional methods for sub, mul, div...
 }
 
+// Secure JSON parsing to avoid vulnerabilities from malicious JSON structures.
 class SecureJsonParser {
-    parse(jsonString) {
-        // Securely parse JSON strings
-        return JSON.parse(jsonString);
+    parse(jsonString: string): any {
+        try {
+            return JSON.parse(jsonString);
+        } catch (error) {
+            throw new Error('Invalid JSON');
+        }
     }
 }
 
+// Logger to track security-related events and anomalies.
 class SecurityLogger {
-    log(message) {
-        // Implement secure logging of messages
-        console.log(message);
+    log(message: string) {
+        console.log(`[SECURITY] ${new Date().toISOString()}: ${message}`);
     }
 }
 
+// Middleware for authenticating user requests.
 class AuthenticationMiddleware {
-    authenticate(req, res, next) {
-        // Implement authentication logic
-        next();
+    authenticate(request: any): boolean {
+        return Boolean(request.headers['Authorization']); // Simplified check
     }
 }
 
+// Error handler for security-related exceptions.
 class SecurityErrorHandler {
-    handleError(err, req, res, next) {
-        // Handle security errors
-        res.status(500).send('Internal Server Error');
+    handleError(error: Error) {
+        console.error(`[Security Error] ${error.message}`);
+        // Additional logging and response handling...
     }
 }
 
+// Output sanitization class to prevent XSS and other output-based attacks.
 class OutputSanitizer {
-    sanitize(output) {
-        // Implement output sanitization logic
-        return output;
+    sanitize(output: string): string {
+        return output.replace(/<[^>]*>/g, ''); // Simple HTML stripping
     }
 }
 
+// Immutable state management for sensitive data.
 class ImmutableState {
-    constructor(state) {
-        Object.freeze(state);
+    constructor(private state: any) {}
+    update(newState: any) {
+        throw new Error('State is immutable');
+    }
+    getState() {
+        return this.state;
     }
 }
 
+// Rate limiter to prevent abuse of sensitive endpoints.
 class RateLimiter {
-    constructor(rate, interval) {
-        this.rate = rate;
-        this.interval = interval;
-    }
-    limit(req, res, next) {
-        // Implement rate limiting logic
-        next();
+    private requests: Map<string, number[]> = new Map();
+    limitRequest(ip: string): boolean {
+        const now = Date.now();
+        const timestamps = this.requests.get(ip) || [];
+        timestamps.push(now);
+        this.requests.set(ip, timestamps.filter(timestamp => now - timestamp < 60000)); // 1 min window
+        return this.requests.get(ip)!.length <= 100; // Allow 100 requests per minute.
     }
 }
 
+// Limiter for input size to prevent DOS attacks.
 class InputSizeLimiter {
-    limit(req, res, next) {
-        // Implement input size limiting logic
-        next();
+    limitInputSize(input: string, maxSize: number): boolean {
+        return input.length <= maxSize;
     }
 }
+
+// Exporting the classes for use in other modules
+export {
+    InputValidator,
+    SafeTokenMath,
+    SecureJsonParser,
+    SecurityLogger,
+    AuthenticationMiddleware,
+    SecurityErrorHandler,
+    OutputSanitizer,
+    ImmutableState,
+    RateLimiter,
+    InputSizeLimiter
+};

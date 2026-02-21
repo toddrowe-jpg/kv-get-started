@@ -832,3 +832,4 @@ BAD HTML:
 # save blog_md
 
 const fullPrompt = "System Prompt: Please summarize the following text.\nUser Query: " + userInput;
+sanitizeOutput = (response) => { /* remove unwanted tags, trim spaces, etc. */ return cleanedResponse; }

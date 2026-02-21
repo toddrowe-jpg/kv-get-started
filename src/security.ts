@@ -1,95 +1,110 @@
 // src/security.ts
 
-// Input validation class to prevent injections and ensure only valid data is processed.
 class InputValidator {
-    validate(input: any, schema: any): boolean {
-        // Implementation of validation logic.
-        return true; // Simplified for illustration.
-    }
-}
-
-// Safe math operations to prevent overflow and underflow in token calculations.
-class SafeTokenMath {
-    add(a: number, b: number): number {
-        if ((b > 0 && a > Number.MAX_SAFE_INTEGER - b) || (b < 0 && a < Number.MIN_SAFE_INTEGER - b)) {
-            throw new Error('SafeMath: addition overflow');
+    static validate(input) {
+        // Implement validation logic, e.g., regex checks
+        if (typeof input !== 'string' || input.length === 0) {
+            throw new Error('Invalid input');
         }
-        return a + b;
+        return true;
     }
-    // Additional methods for sub, mul, div...
 }
 
-// Secure JSON parsing to avoid vulnerabilities from malicious JSON structures.
+class SafeTokenMath {
+    static add(a, b) {
+        const sum = a + b;
+        if (sum < a || sum < b) throw new Error('Overflow error');
+        return sum;
+    }
+}
+
 class SecureJsonParser {
-    parse(jsonString: string): any {
+    static parse(jsonString) {
         try {
             return JSON.parse(jsonString);
-        } catch (error) {
-            throw new Error('Invalid JSON');
+        } catch (err) {
+            throw new Error('Invalid JSON input');
         }
     }
 }
 
-// Logger to track security-related events and anomalies.
 class SecurityLogger {
-    log(message: string) {
-        console.log(`[SECURITY] ${new Date().toISOString()}: ${message}`);
+    static log(message) {
+        // Implement logging to a secure store
+        console.log(`SECURITY LOG: ${message}`);
     }
 }
 
-// Middleware for authenticating user requests.
 class AuthenticationMiddleware {
-    authenticate(request: any): boolean {
-        return Boolean(request.headers['Authorization']); // Simplified check
+    static authenticate(req, res, next) {
+        // Implement authentication logic (e.g., JWT)
+        const token = req.headers['authorization'];
+        if (!token) return res.status(401).send('Unauthorized');
+        // Further token validation logic here...
+        next();
     }
 }
 
-// Error handler for security-related exceptions.
 class SecurityErrorHandler {
-    handleError(error: Error) {
-        console.error(`[Security Error] ${error.message}`);
-        // Additional logging and response handling...
+    static handle(err, req, res, next) {
+        console.error(err);
+        res.status(500).send('Internal Server Error'); // don't leak sensitive info
     }
 }
 
-// Output sanitization class to prevent XSS and other output-based attacks.
 class OutputSanitizer {
-    sanitize(output: string): string {
-        return output.replace(/<[^>]*>/g, ''); // Simple HTML stripping
+    static sanitize(output) {
+        // Basic sanitization to prevent XSS
+        return output.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 }
 
-// Immutable state management for sensitive data.
 class ImmutableState {
-    constructor(private state: any) {}
-    update(newState: any) {
-        throw new Error('State is immutable');
+    constructor(state) {
+        this._state = state;
     }
-    getState() {
-        return this.state;
+    get state() {
+        return this._state;
     }
 }
 
-// Rate limiter to prevent abuse of sensitive endpoints.
 class RateLimiter {
-    private requests: Map<string, number[]> = new Map();
-    limitRequest(ip: string): boolean {
-        const now = Date.now();
-        const timestamps = this.requests.get(ip) || [];
-        timestamps.push(now);
-        this.requests.set(ip, timestamps.filter(timestamp => now - timestamp < 60000)); // 1 min window
-        return this.requests.get(ip)!.length <= 100; // Allow 100 requests per minute.
+    constructor(limit, timeout) {
+        this.limit = limit;
+        this.timeout = timeout;
+        this.requests = {};
+    }
+    isAllowed(userId) {
+        const currentTime = Date.now();
+        if (!this.requests[userId]) {
+            this.requests[userId] = { count: 0, firstRequestTime: currentTime };
+        }
+        const userRequests = this.requests[userId];
+        if (currentTime - userRequests.firstRequestTime < this.timeout) {
+            if (userRequests.count >= this.limit) return false;
+            userRequests.count++;
+        } else {
+            userRequests.count = 1;
+            userRequests.firstRequestTime = currentTime;
+        }
+        return true;
     }
 }
 
-// Limiter for input size to prevent DOS attacks.
 class InputSizeLimiter {
-    limitInputSize(input: string, maxSize: number): boolean {
-        return input.length <= maxSize;
+    constructor(maxSize) {
+        this.maxSize = maxSize;
+    }
+    validate(input) {
+        if (JSON.stringify(input).length > this.maxSize) {
+            throw new Error('Input size exceeds limit');
+        }
+        return true;
     }
 }
 
-// Exporting the classes for use in other modules
+// Additional code to export classes if needed
+
 export {
     InputValidator,
     SafeTokenMath,

@@ -1,37 +1,46 @@
-// src/sanitizer.ts
-
-/**
- * Escapes HTML special characters in a string.
- * @param {string} str - The string to escape.
- * @returns {string} - The escaped string.
- */
-function escapeHtml(str: string): string {
-    return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+// Function to escape HTML entities
+function escapeHtml(unsafe) {
+    return unsafe.replace(/[&<"'`=]/g, function (match) {
+        switch (match) {
+            case '&': return '&amp;';
+            case '<': return '&lt;';
+            case '>': return '&gt;';
+            case '"': return '&quot;';
+            case "'": return '&#039;';
+            case '`': return '&#x60;';
+            case '=': return '&#x3D;';
+        }
+    });
 }
 
-/**
- * Validates a URL to ensure it is well-formed.
- * @param {string} url - The URL to validate.
- * @returns {boolean} - True if valid, false otherwise.
- */
-function isValidUrl(url: string): boolean {
-    const pattern = /^(https?:\/\/)?([\w.-]+)(:[0-9]{1,5})?(\/.*)?$/;
-    return pattern.test(url);
+// Function to sanitize JSON objects
+function sanitizeJson(data) {
+    // Implement your sanitization logic here (e.g. removing sensitive data)
+    return JSON.stringify(data);
 }
 
-/**
- * Sanitizes content by escaping HTML and validating URLs.
- * @param {string} content - The content to sanitize.
- * @returns {string} - The sanitized content.
- */
-function sanitizeContent(content: string): string {
-    return escapeHtml(content);
+// Function to validate URL
+function validateUrl(url) {
+    const pattern = new RegExp('^(https?:\/\/)?'+ // protocol
+        '((([a-z\d]([a-z\d-]*[a-z\d])?)\.)+[a-z]{2,}|'+ // domain name
+        'localhost|'+ // localhost
+        '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|'+ // IP
+        '\[?[a-fA-F0-9]*:[a-fA-F0-9:]+\]?)(:\d+)?(\/[-a-z\d%_.~+]*)*'+ // port and path
+        '(\?[;&a-z\d%_.~+=-]*)?'+ // query string
+        '(\#[-a-z\d_]*)?$','i'); // fragment locator
+    return !!pattern.test(url);
 }
 
-// Exporting functions for use in other modules.
-export { escapeHtml, isValidUrl, sanitizeContent };
+// Function to sanitize Markdown
+function sanitizeMarkdown(input) {
+    // Implement your Markdown sanitization logic here
+    return input;
+}
+
+// Function to sanitize data for logging
+function sanitizeForLog(data) {
+    // Implement your sanitization logic here (e.g. removing sensitive info)
+    return JSON.stringify(data);
+}
+
+// Add other existing functions and logic as required

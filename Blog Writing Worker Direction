@@ -831,3 +831,4 @@ BAD HTML:
 # blog_md = add_html_comparison_table(keyword, blog_md, after_heading="How to choose")
 # save blog_md
 
+const fullPrompt = "System Prompt: Please summarize the following text.\nUser Query: " + userInput;

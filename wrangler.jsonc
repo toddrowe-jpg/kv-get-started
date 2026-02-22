@@ -15,7 +15,8 @@
 	},
 	"kv_namespaces": [
 		{
-			"binding": "USER_NOTIFICATION",
+		{"binding":"JOBS_KV","id":"2498cb1f06bb46b389625402e63b0596"}	
+            "binding": "USER_NOTIFICATION",
 			"id": "d22af14dfbc24596bd52381eece7ebd3"
 		},
 		{

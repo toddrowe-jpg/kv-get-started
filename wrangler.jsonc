@@ -28,7 +28,7 @@
 		{
 			// TODO: Replace with your actual R2 bucket name from the Cloudflare dashboard
 			"binding": "ASSETS_R2",
-			"bucket_name": "<ASSETS_R2_BUCKET_NAME>"
+			"bucket_name": "bitxaiworkerr2"
 		}
 	],
 	"queues": {

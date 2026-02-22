@@ -1,7 +1,7 @@
 # BITX Capital Blog Writing Worker Application
 
 ## Project Overview
-The BITX Capital blog writing worker application facilitates the creation and management of blog content for BITX Capital's online presence. This application allows users to draft, edit, and publish articles efficiently.
+The BITX Capital blog writing worker application facilitates the creation and management of blog content for BITX Capital's online presence. This application allows users to draft, edit, and publish articles efficiently using Cloudflare Workers AI, KV, Queues, and R2.
 
 ## Setup Instructions
 1. **Clone the repository:**
@@ -16,36 +16,85 @@ The BITX Capital blog writing worker application facilitates the creation and ma
    ```bash
    npm install
    ```
+4. **Configure bindings** in `wrangler.jsonc` (replace placeholder values):
+   - `JOBS_KV` — KV namespace ID from the Cloudflare dashboard
+   - `ASSETS_R2` — R2 bucket name from the Cloudflare dashboard
+   - `JOBS_QUEUE` — Queue name from the Cloudflare dashboard
+
+## Required Cloudflare Bindings
+
+| Binding | Type | Purpose |
+|---|---|---|
+| `AI` | Workers AI | LLM and image generation |
+| `USER_NOTIFICATION` | KV Namespace | User notifications |
+| `JOBS_KV` | KV Namespace | Job state persistence |
+| `ASSETS_R2` | R2 Bucket | Generated image storage |
+| `JOBS_QUEUE` | Queue | Background job processing |
+
+WordPress secrets (future use — do **not** commit; add via `wrangler secret put`):
+- `WP_USERNAME` — WordPress application username
+- `WP_APP_PASSWORD` — WordPress application password
+
+## Job Pipeline Usage
+
+### 1. Start a job
+```
+GET /start?topic=<your topic>&site=https://www.bitxcapital.com&publish=0
+```
+Returns:
+```json
+{
+  "jobId": "...",
+  "statusUrl": "/status?id=...",
+  "resultUrl": "/result?id=..."
+}
+```
+
+### 2. Poll job status
+```
+GET /status?id=<jobId>
+```
+Returns `status` values: `queued` → `running` → `complete` (or `error`).
+
+### 3. Retrieve full result
+```
+GET /result?id=<jobId>
+```
+Returns the complete job record including the generated article `content`, `assetUrl`, and WordPress metadata.
+
+### 4. Access the generated image
+```
+GET /asset/<jobId>
+```
+Streams the generated PNG image from R2. The `assetUrl` field in the job result points here.
+
+## Background Processing
+When a job is enqueued via `/start`, the Queue consumer:
+1. Calls `@cf/meta/llama-3.3-70b-instruct` to generate article content (~800 tokens).
+2. Calls `@cf/meta/llama-3.3-70b-instruct` again to produce an image prompt.
+3. Calls `@cf/black-forest-labs/flux-1-schnell` to generate a header image.
+4. Stores the image in R2 under `jobs/<jobId>/image.png`.
+5. Marks the job `complete` in KV with `assetUrl` and `content` populated.
+
+## WordPress Integration (Planned)
+WordPress posting is **not yet implemented**. The job record already includes a `wp.baseUrl` placeholder (`https://www.bitxcapital.com`). When implemented, it will require:
+- `WP_USERNAME` secret
+- `WP_APP_PASSWORD` secret (WordPress Application Password)
 
 ## Architecture
-The application is built using a microservices architecture that allows independent scaling and development of different components. It leverages Node.js for the server-side logic and MongoDB for data storage.
-
-## Features
-- User authentication
-- Rich text editor for drafting articles
-- Version control for articles
-- Publishing onto the BITX Capital blog
-
-## Usage Examples
-After setting up the application, you can:
-- Create a new article:
-  ```bash
-  node create-article.js
-  ```
-- Edit an existing article:
-  ```bash
-  node edit-article.js articleId
-  ```
+Built on Cloudflare Workers using:
+- **Workers AI** — LLM and image generation
+- **Cloudflare Queues** — Durable background processing
+- **Workers KV** — Job state and result storage
+- **R2** — Binary image asset storage
 
 ## Security Measures
-- JWT authentication for secure user sessions
-- Input validation to prevent XSS and SQL injection attacks
-- Rate limiting to prevent abuse of the API
+- No secrets committed to source control (use `wrangler secret put`)
+- Input validation on all endpoints
+- CORS headers set to `*` for API access
 
-## Deployment Guidelines
-To deploy the application:
-1. **Build the application:**
-   ```bash
-   npm run build
-   ```
-2. **Deploy to your preferred cloud provider (AWS, Heroku, etc.).**
+## Deployment
+```bash
+npm run deploy
+```
+

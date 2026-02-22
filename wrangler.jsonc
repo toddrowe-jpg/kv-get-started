@@ -37,13 +37,13 @@
 			{
 				// TODO: Replace with your actual queue name from the Cloudflare dashboard
 				"binding": "JOBS_QUEUE",
-				"queue": "<JOBS_QUEUE_NAME>"
+				"queue": "kv-get-started-jobs"
 			}
 		],
 		"consumers": [
 			{
 				// TODO: Replace with your actual queue name (must match producer above)
-				"queue": "<JOBS_QUEUE_NAME>"
+				"queue": "kv-get-started-jobs"
 			}
 		]
 	}

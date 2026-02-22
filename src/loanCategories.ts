@@ -1,9 +1,1 @@
-// loanCategories.ts
-
-export const loanCategories = [
-    { id: 1, name: 'Home Loan' },
-    { id: 2, name: 'Personal Loan' },
-    { id: 3, name: 'Auto Loan' },
-    { id: 4, name: 'Student Loan' },
-    { id: 5, name: 'Business Loan' }
-];
+const loanCategories = [\n    'Startup Business Loans',\n    'SBA 7(a) Loans',\n    'Business Line of Credit',\n    'Short-Term Loans',\n    'Mid-term Loans',\n    'Equipment Financing',\n    'Merchant Cash Advance',\n    'Invoice Financing',\n    'Inventory Financing',\n    'HELOC for Business'\n];\n\nfunction autoCategorize(amount) {\n    // Implement categorization logic based on the amount\n    // Example logic (this needs to be tailored to your specific requirements)\n    if (amount < 50000) {\n        return loanCategories[0]; // Example category for small amounts\n    } else if (amount < 250000) {\n        return loanCategories[1]; // Example for medium amounts\n    } else {\n        return loanCategories[2]; // Example for large amounts\n    }\n}\n\nfunction enforceCategory(category) {\n    if (!loanCategories.includes(category)) {\n        throw new Error('Invalid loan category: ' + category);\n    }\n    return true;\n}\n\nmodule.exports = { loanCategories, autoCategorize, enforceCategory };

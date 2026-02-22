@@ -1,0 +1,12 @@
+{
+  "topic": "Getting Started with BITX Capital KV Storage",
+  "audience": "Developers and technical users interested in Cloudflare Workers and distributed caching",
+  "primary_keyword": "BITX Capital KV storage tutorial",
+  "goal": "Provide comprehensive guide for implementing KV-based blog automation with Cloudflare Workers",
+  "angle": "How to build a scalable blog writing worker with TypeScript and Cloudflare Workers KV",
+  "word_count": 2500,
+  "sources": [
+    "https://developers.cloudflare.com/workers/runtime-apis/kv/",
+    "https://developers.cloudflare.com/workers/get-started/"
+  ]
+}

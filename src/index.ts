@@ -1,3 +1,5 @@
-import BlogWorkflowManager from './blogWorkflow';
+import { blogWorkflow } from './blogWorkflow';
 
-// Rest of the code
+// Other code and logic will follow this import statement.
+
+export default blogWorkflow;

@@ -3,48 +3,43 @@
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "kv-get-started",
-	"main": "src/index.ts",
-	"compatibility_date": "2025-03-27",
-	"observability": {
-		"enabled": true
-	},
-	"ai": {
-		"binding": "AI"
-	},
-	"kv_namespaces": [
-		{
-		{"binding":"JOBS_KV","id":"2498cb1f06bb46b389625402e63b0596"}	
-            "binding": "USER_NOTIFICATION",
-			"id": "d22af14dfbc24596bd52381eece7ebd3"
-		},
-		{
-			// TODO: Replace with your actual JOBS_KV namespace ID from the Cloudflare dashboard
-			"binding": "JOBS_KV",
-			"id": "<JOBS_KV_NAMESPACE_ID>"
-		}
-	],
-	"r2_buckets": [
-		{
-			// TODO: Replace with your actual R2 bucket name from the Cloudflare dashboard
-			"binding": "ASSETS_R2",
-			"bucket_name": "bitxaiworkerr2"
-		}
-	],
-	"queues": {
-		"producers": [
-			{
-				// TODO: Replace with your actual queue name from the Cloudflare dashboard
-				"binding": "JOBS_QUEUE",
-				"queue": "kv-get-started-jobs"
-			}
-		],
-		"consumers": [
-			{
-				// TODO: Replace with your actual queue name (must match producer above)
-				"queue": "kv-get-started-jobs"
-			}
-		]
-	}
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kv-get-started",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-27",
+  "observability": {
+    "enabled": true
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "USER_NOTIFICATION",
+      "id": "d22af14dfbc24596bd52381eece7ebd3"
+    },
+    {
+      "binding": "JOBS_KV",
+      "id": "2498cb1f06bb46b389625402e63b0596"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS_R2",
+      "bucket_name": "bitxaiworkerr2"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "JOBS_QUEUE",
+        "queue": "kv-get-started-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "kv-get-started-jobs"
+      }
+    ]
+  }
 }

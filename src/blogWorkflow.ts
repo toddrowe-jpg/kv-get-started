@@ -1,52 +1,40 @@
-// Interface for Blog Workflow Configuration
-export interface BlogWorkflowConfig {
-    dailyLimit: number;
-    phases: string[];
+// Assuming loanCategories functions are imported at the top
+import { loanCategories } from './loanCategories';
+
+interface BlogPost {
+    title: string;
+    content: string;
+    category: string; // New category field
 }
 
-export interface BlogWorkflowState {
-    currentPhase: string;
-    tokensUsed: number;
-    blogContent: string;
+interface BlogWorkflowState {
+    // Other properties...
+    category?: string; // New category property
 }
 
-export class BlogWorkflowManager {
-    private state: BlogWorkflowState;
+const BlogWorkflowPhases = [
+    // Other phases...
+    'Categorize', // Update the workflow phases to include 'Categorize'
+];
 
-    constructor(config: BlogWorkflowConfig) {
-        this.state = {
-            currentPhase: config.phases[0],
-            tokensUsed: 0,
-            blogContent: '',
-        };
-    }
-
-    research() {
-        // Research phase implementation
-    }
-
-    write() {
-        // Write phase implementation
-    }
-
-    generateImage() {
-        // Generate image phase implementation
-    }
-
-    review() {
-        // Review phase implementation
-    }
-
-    post() {
-        // Post phase implementation
-    }
-
-    execute() {
-        // Execute workflow phases
-    }
+// Method to categorize a blog
+function categorizeBlog(post: BlogPost): string {
+    // Logic to categorize the blog post using loanCategories
+    return loanCategories.categorize(post.content);
 }
 
-export const blogWorkflow = new BlogWorkflowManager({
-    dailyLimit: 30000,
-    phases: ['Research', 'Write', 'Generate Image', 'Review', 'Post']
-});
+// Enforce categorization compliance
+function enforceCategorizationCompliance(post: BlogPost): boolean {
+    // Logic to ensure the blog post complies with categorization rules
+    return loanCategories.isCompliant(post.category);
+}
+
+// Create a new blog post
+function createBlogPost(post: BlogPost) {
+    // Logic to create the blog post
+    if (enforceCategorizationCompliance(post)) {
+        // Save the post
+    } else {
+        throw new Error('Post does not comply with categorization rules.');
+    }
+}

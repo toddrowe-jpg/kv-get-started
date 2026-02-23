@@ -8,7 +8,7 @@ export interface Env {
 // --- Gemini helper ---
 
 const GEMINI_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent
 
 async function geminiGenerate(apiKey: string, prompt: string): Promise<string> {
   const res = await fetch(GEMINI_API_URL, {

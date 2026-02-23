@@ -9,6 +9,12 @@ import {
   requestLoggingMiddleware,
   sanitizeOutput,
 } from "./middleware";
+import {
+  assertPhaseModel,
+  PhaseModelMismatchError,
+  PHASE_MODEL_REGISTRY,
+} from "./agentRegistry";
+import { buildOutlinePrompt, buildDraftPrompt, BlogBrief } from "./pythonPipelines";
 
 export interface Env {
   AI: {
@@ -112,6 +118,8 @@ export default {
         if (!q) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: q" }, 400));
         if (q.length > 500) return securityHeadersMiddleware(jsonResponse({ error: "Query param q exceeds maximum length of 500 characters" }, 400));
         await quota.consumeTokens(1500, "gemini/research");
+        // Enforce role separation: research phase must use the registered model
+        assertPhaseModel("research", "gemini-1.5-flash-latest");
         const prompt =
           `You are a blog research assistant. Return a JSON object (no markdown fences) with the following keys:\n` +
           `"topic": the research topic,\n` +
@@ -142,6 +150,8 @@ export default {
         if (!body.draft) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: draft" }, 400));
         if (body.draft.length > 20000) return securityHeadersMiddleware(jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400));
         await quota.consumeTokens(3000, "gemini/edit");
+        // Enforce role separation: edit phase must use the registered model
+        assertPhaseModel("edit", "gemini-1.5-flash-latest");
         const prompt =
           `You are an expert blog editor. Revise the following blog draft to improve EEAT (Experience, Expertise, Authoritativeness, Trustworthiness), ` +
           `clarity, structure, and include a compelling call-to-action. ` +
@@ -163,6 +173,8 @@ export default {
         if (!body.draft) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: draft" }, 400));
         if (body.draft.length > 20000) return securityHeadersMiddleware(jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400));
         await quota.consumeTokens(3000, "gemini/factcheck");
+        // Enforce role separation: factcheck phase must use the registered model
+        assertPhaseModel("factcheck", "gemini-1.5-flash-latest");
         const sourcesText = (body.sources ?? [])
           .map((s, i) => {
             const title = typeof s.title === "string" ? s.title : "";
@@ -213,6 +225,8 @@ export default {
         await store.addLog(workflowId, "research", "phase_started", { topic: body.topic });
 
         try {
+          // Enforce role separation: research phase must use the registered model
+          assertPhaseModel("research", "gemini-1.5-flash-latest");
           const researchPrompt =
             `You are a blog research assistant. Return a JSON object (no markdown fences) with the following keys:\n` +
             `"topic": the research topic,\n` +
@@ -241,6 +255,104 @@ export default {
         return securityHeadersMiddleware(jsonResponse({ workflowId, state }));
       }
 
+      // --- Python pipeline endpoints ---
+
+      if (pathname === "/workflow/blog/outline") {
+        if (request.method !== "POST") return securityHeadersMiddleware(jsonResponse({ error: "Method not allowed" }, 405));
+        if (!env.GEMINI_API_KEY) return securityHeadersMiddleware(jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503));
+        let body: Partial<BlogBrief>;
+        try {
+          body = await request.json();
+        } catch {
+          return securityHeadersMiddleware(jsonResponse({ error: "Invalid JSON body" }, 400));
+        }
+        if (!body.topic) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: topic" }, 400));
+        if (String(body.topic).length > 500) return securityHeadersMiddleware(jsonResponse({ error: "Field topic exceeds maximum length of 500 characters" }, 400));
+
+        const brief: BlogBrief = {
+          topic: String(body.topic),
+          audience: typeof body.audience === "string" ? body.audience : "small business owners",
+          primary_keyword: typeof body.primary_keyword === "string" ? body.primary_keyword : String(body.topic),
+          goal: typeof body.goal === "string" ? body.goal : "educate and convert",
+          angle: typeof body.angle === "string" ? body.angle : "practical guide",
+          word_count: typeof body.word_count === "number" ? body.word_count : 1200,
+          sources: Array.isArray(body.sources) ? body.sources : [],
+        };
+
+        await quota.consumeTokens(1500, "workflow/outline");
+        // Enforce role separation: outline phase must use the registered model
+        assertPhaseModel("outline", "gemini-1.5-flash-latest");
+
+        const workflowId = `wf_${Date.now()}_${crypto.randomUUID().split("-")[0]}`;
+        const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
+        await store.create(workflowId, "outline");
+        await store.addLog(workflowId, "outline", "phase_started", { topic: brief.topic });
+
+        try {
+          const prompt = buildOutlinePrompt(brief);
+          const outline = await geminiGenerate(env.GEMINI_API_KEY, prompt, "workflow/outline");
+          await store.setPhaseOutput(workflowId, "outline", { outline });
+          await store.addLog(workflowId, "outline", "phase_completed");
+          await store.complete(workflowId);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await store.setError(workflowId, "outline", message);
+          await store.addLog(workflowId, "outline", "phase_failed", { error: message });
+        }
+
+        const state = await store.get(workflowId);
+        return securityHeadersMiddleware(jsonResponse({ workflowId, state }));
+      }
+
+      if (pathname === "/workflow/blog/draft") {
+        if (request.method !== "POST") return securityHeadersMiddleware(jsonResponse({ error: "Method not allowed" }, 405));
+        if (!env.GEMINI_API_KEY) return securityHeadersMiddleware(jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503));
+        let body: Partial<BlogBrief> & { outline?: string };
+        try {
+          body = await request.json();
+        } catch {
+          return securityHeadersMiddleware(jsonResponse({ error: "Invalid JSON body" }, 400));
+        }
+        if (!body.topic) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: topic" }, 400));
+        if (!body.outline) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: outline" }, 400));
+        if (String(body.topic).length > 500) return securityHeadersMiddleware(jsonResponse({ error: "Field topic exceeds maximum length of 500 characters" }, 400));
+        if (String(body.outline).length > 10000) return securityHeadersMiddleware(jsonResponse({ error: "Field outline exceeds maximum length of 10000 characters" }, 400));
+
+        const brief: BlogBrief = {
+          topic: String(body.topic),
+          audience: typeof body.audience === "string" ? body.audience : "small business owners",
+          primary_keyword: typeof body.primary_keyword === "string" ? body.primary_keyword : String(body.topic),
+          goal: typeof body.goal === "string" ? body.goal : "educate and convert",
+          angle: typeof body.angle === "string" ? body.angle : "practical guide",
+          word_count: typeof body.word_count === "number" ? body.word_count : 1200,
+          sources: Array.isArray(body.sources) ? body.sources : [],
+        };
+
+        await quota.consumeTokens(3000, "workflow/draft");
+        // Enforce role separation: draft phase must use the registered model
+        assertPhaseModel("draft", "gemini-1.5-flash-latest");
+
+        const workflowId = `wf_${Date.now()}_${crypto.randomUUID().split("-")[0]}`;
+        const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
+        await store.create(workflowId, "draft");
+        await store.addLog(workflowId, "draft", "phase_started", { topic: brief.topic });
+
+        try {
+          const prompt = buildDraftPrompt(brief, String(body.outline));
+          const draft = await geminiGenerate(env.GEMINI_API_KEY, prompt, "workflow/draft");
+          await store.setPhaseOutput(workflowId, "draft", { draft });
+          await store.addLog(workflowId, "draft", "phase_completed");
+          await store.complete(workflowId);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await store.setError(workflowId, "draft", message);
+          await store.addLog(workflowId, "draft", "phase_failed", { error: message });
+        }
+
+        const state = await store.get(workflowId);
+        return securityHeadersMiddleware(jsonResponse({ workflowId, state }));
+      }
+
       if (pathname.startsWith("/workflow/") && pathname.length > "/workflow/".length) {
         const workflowId = pathname.slice("/workflow/".length);
         const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
@@ -259,14 +371,22 @@ export default {
           "/gemini/research?q=": "Blog research outline via Google Gemini",
           "/gemini/edit (POST)": "Blog draft editing via Google Gemini",
           "/gemini/factcheck (POST)": "Fact-checking against sources via Google Gemini",
-          "/workflow/blog (POST)": "Start a persistent blog workflow execution",
+          "/workflow/blog (POST)": "Start a persistent blog workflow execution (research phase)",
+          "/workflow/blog/outline (POST)": "Run the outline pipeline (Python prompt) via Google Gemini",
+          "/workflow/blog/draft (POST)": "Run the draft pipeline (Python prompt) via Google Gemini",
           "/workflow/:id (GET)": "Retrieve workflow state, phase outputs, logs, and errors",
         },
+        phaseModelRegistry: PHASE_MODEL_REGISTRY,
       }));
     } catch (err) {
       if (err instanceof QuotaExceededError) {
         return securityHeadersMiddleware(
           jsonResponse({ route: pathname, error: err.message, used: err.used, limit: err.limit }, 429)
+        );
+      }
+      if (err instanceof PhaseModelMismatchError) {
+        return securityHeadersMiddleware(
+          jsonResponse({ route: pathname, error: err.message, phase: err.phase, expectedModel: err.expectedModel }, 500)
         );
       }
       if (err instanceof GeminiApiError) {

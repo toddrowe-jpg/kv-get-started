@@ -1,1 +1,24 @@
-export const loanCategories = [\n    'Startup Business Loans',\n    'SBA 7(a) Loans',\n    'Business Line of Credit',\n    'Short-Term Loans',\n    'Mid-term Loans',\n    'Equipment Financing',\n    'Merchant Cash Advance',\n    'Invoice Financing',\n    'Inventory Financing',\n    'HELOC for Business'\n];\n\nexport function autoCategorize(amount) {\n    // Function logic to categorize loan based on amount\n    if (amount < 50000) { return 'Short-Term Loans'; }\n    else if (amount < 250000) { return 'Mid-term Loans'; }\n    else return 'SBA 7(a) Loans';\n}\n\nexport function enforceCategory(category) {\n    const categories = loanCategories;\n    return categories.includes(category) ? category : 'Invalid Category';\n}
+export const loanCategories = [
+    'Startup Business Loans',
+    'SBA 7(a) Loans',
+    'Business Line of Credit',
+    'Short-Term Loans',
+    'Mid-term Loans',
+    'Equipment Financing',
+    'Merchant Cash Advance',
+    'Invoice Financing',
+    'Inventory Financing',
+    'HELOC for Business'
+];
+
+export function autoCategorize(amount: number): string {
+    // Function logic to categorize loan based on amount
+    if (amount < 50000) { return 'Short-Term Loans'; }
+    else if (amount < 250000) { return 'Mid-term Loans'; }
+    else return 'SBA 7(a) Loans';
+}
+
+export function enforceCategory(category: string): string {
+    const categories = loanCategories;
+    return categories.includes(category) ? category : 'Invalid Category';
+}

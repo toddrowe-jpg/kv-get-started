@@ -28,6 +28,23 @@ npx wrangler secret put GEMINI_API_KEY
 
 You will be prompted to enter the key value. The secret is stored securely in Cloudflare and is never logged or exposed in responses.
 
+### `GEMINI_MODEL` (optional)
+Override the Gemini model used by all `/gemini/*` endpoints. Defaults to `gemini-1.5-flash-latest`. Set as a Cloudflare environment variable in `wrangler.jsonc` or via the Cloudflare dashboard — no code redeploy required.
+
+Commonly supported model IDs for the `v1beta` `generateContent` API:
+- `gemini-1.5-flash-latest` (default)
+- `gemini-1.5-pro-latest`
+- `gemini-2.0-flash`
+
+```jsonc
+// wrangler.jsonc
+{
+  "vars": {
+    "GEMINI_MODEL": "gemini-1.5-pro-latest"
+  }
+}
+```
+
 ## Architecture
 The application is built using a microservices architecture that allows independent scaling and development of different components. It leverages Node.js for the server-side logic and MongoDB for data storage.
 

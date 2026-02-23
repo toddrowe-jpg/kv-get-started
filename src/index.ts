@@ -3,15 +3,19 @@ export interface Env {
     run(model: string, input: unknown): Promise<unknown>;
   };
   GEMINI_API_KEY: string;
+  GEMINI_MODEL?: string;
 }
 
 // --- Gemini helper ---
 
-const GEMINI_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+const GEMINI_API_BASE =
+  "https://generativelanguage.googleapis.com/v1beta/models/";
+const GEMINI_DEFAULT_MODEL = "gemini-1.5-flash-latest";
 
-async function geminiGenerate(apiKey: string, prompt: string): Promise<string> {
-  const res = await fetch(GEMINI_API_URL, {
+async function geminiGenerate(apiKey: string, prompt: string, model?: string): Promise<string> {
+  const modelName = model || GEMINI_DEFAULT_MODEL;
+  const url = `${GEMINI_API_BASE}${modelName}:generateContent`;
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -100,7 +104,7 @@ export default {
           `"suggestedHeadings": an array of 4-6 H2 headings for a blog post,\n` +
           `"sources": an array of up to 5 suggested reference source titles.\n` +
           `Topic: ${q}`;
-        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt);
+        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt, env.GEMINI_MODEL);
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
@@ -126,7 +130,7 @@ export default {
           `clarity, structure, and include a compelling call-to-action. ` +
           `Return only the revised Markdown text with no additional commentary.\n\n` +
           `DRAFT:\n${body.draft}`;
-        const revised = await geminiGenerate(env.GEMINI_API_KEY, prompt);
+        const revised = await geminiGenerate(env.GEMINI_API_KEY, prompt, env.GEMINI_MODEL);
         return jsonResponse({ revised });
       }
 
@@ -158,7 +162,7 @@ export default {
           `"suggestedRewrite": a corrected version of the claim tied to a provided source, or empty string if supported.\n\n` +
           `SOURCES:\n${sourcesText || "(none provided)"}\n\n` +
           `DRAFT:\n${body.draft}`;
-        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt);
+        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt, env.GEMINI_MODEL);
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);

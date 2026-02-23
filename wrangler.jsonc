@@ -13,16 +13,14 @@
   "ai": {
     "binding": "AI"
   },
-"kv_namespaces": [
-  {
-    "binding": "USER_NOTIFICATION",
-    "id": "d22af14dfbc24596bd52381eece7ebd3"
-  },
-  {
-    "binding": "JOBS_KV",
-    "id": "d22af14dfbc24596bd52381eece7ebd3"
-  }
-],
+  "kv_namespaces": [
+    {
+      "binding": "USER_NOTIFICATION",
+      "id": "d22af14dfbc24596bd52381eece7ebd3"
+    },
+    {
+      "binding": "JOBS_KV",
+      "id": "d22af14dfbc24596bd52381eece7ebd3"
     }
   ],
   "r2_buckets": [

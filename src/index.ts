@@ -8,7 +8,7 @@ export interface Env {
 // --- Gemini helper ---
 
 const GEMINI_API_URL =
-https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent";
 
 async function geminiGenerate(apiKey: string, prompt: string): Promise<string> {
   const res = await fetch(GEMINI_API_URL, {
@@ -21,15 +21,15 @@ async function geminiGenerate(apiKey: string, prompt: string): Promise<string> {
       contents: [{ parts: [{ text: prompt }] }],
     }),
   });
+
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${errText}`);
+    throw new Error(`Gemini error ${res.status}: ${await res.text()}`);
   }
-  const data = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  return text;
+
+  const data: any = await res.json();
+  return (
+    data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? ""
+  ).trim();
 }
 
 function jsonResponse(data: unknown, status = 200): Response {

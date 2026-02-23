@@ -336,8 +336,139 @@ To deploy the application:
    ```bash
    npx wrangler secret put GEMINI_API_KEY
    ```
-2. **Deploy:**
+2. **(Optional) Set the alert webhook URL:**
+   ```bash
+   npx wrangler secret put ALERT_WEBHOOK_URL
+   ```
+3. **Deploy:**
    ```bash
    npm run deploy
    ```
+
+## Observability & Alerting
+
+The Worker ships structured logs, abuse records, and alerts to the **`BLOG_WORKFLOW_STATE` Cloudflare KV namespace** using a dedicated key-space prefix (`obs:*`). All writes are non-blocking — observability errors are swallowed and logged to the Worker console so they can never interrupt request handling.
+
+### KV Key Structure
+
+| Key pattern | Content | TTL |
+|---|---|---|
+| `obs:log:<YYYY-MM-DD>:<uuid>` | Structured request/event log entry | 7 days |
+| `obs:abuse:<ip>` | Per-IP abuse counters (auth failures, rate-limit hits) | 24 hours |
+| `obs:alert:<uuid>` | Generated alert record | 30 days |
+
+### What is logged
+
+Every request handled by the Worker writes an `ObsEvent` entry of type `request` (level `INFO`). Additional event types written automatically:
+
+| Event type | Level | Trigger |
+|---|---|---|
+| `request` | INFO | Every incoming request (authenticated or not) |
+| `auth_failure` | WARN | Bearer token rejected by the middleware chain |
+| `rate_limited` | WARN | Request blocked by the sliding-window rate limiter |
+| `quota_exceeded` | ERROR | Daily token quota would be exceeded |
+| `error` | ERROR | Unhandled exception or Gemini API error |
+| `phase_transition` | INFO | Workflow phase started / completed (via `WorkflowStore.addLog`) |
+
+### Abuse detection
+
+The Worker tracks per-IP abuse counters:
+
+- **Auth failures**: incremented on every `401` response due to a bad/missing Bearer token.
+- **Rate-limit hits**: incremented on every `429` response due to the rate limiter.
+
+When an IP reaches the threshold (`authFailures ≥ 10` or `rateLimitHits ≥ 5`), its abuse record is flagged (`flagged: true`) and an `abuse_detected` alert is created automatically.
+
+### Alerts
+
+Alerts are generated for the following conditions:
+
+| Alert type | Severity | Trigger |
+|---|---|---|
+| `workflow_failed` | critical | A workflow phase (`research`, `outline`, or `draft`) throws an error |
+| `workflow_stuck` | warning | A workflow is still in `running` state > 5 minutes after its last update |
+| `quota_exceeded` | warning | Daily LLM token quota exceeded |
+| `api_error` | warning / critical | Gemini API error or unhandled exception in a request |
+| `abuse_detected` | critical | An IP reaches the auth-failure or rate-limit abuse threshold |
+
+### External webhook notifications
+
+Set the `ALERT_WEBHOOK_URL` secret to receive alert payloads via HTTP POST whenever an alert is created:
+
+```bash
+npx wrangler secret put ALERT_WEBHOOK_URL
+# paste your webhook URL (e.g. Slack incoming webhook, PagerDuty Events API, etc.)
+```
+
+The POST body is JSON with the shape:
+
+```json
+{
+  "type": "workflow_failed",
+  "severity": "critical",
+  "message": "Workflow wf_... failed at phase \"research\": ...",
+  "details": { "workflowId": "...", "phase": "research", "error": "..." },
+  "timestamp": "2025-01-01T00:00:00.000Z",
+  "alertId": "<uuid>"
+}
+```
+
+Webhook delivery failures are logged to the Worker console but do not affect the HTTP response returned to the client.
+
+### Stuck workflow detection
+
+When a client calls `GET /workflow/:id`, the Worker checks whether the workflow is still in `running` status and has not been updated for more than **5 minutes**. If so, a `workflow_stuck` alert is created and — if `ALERT_WEBHOOK_URL` is configured — the notification is sent immediately.
+
+### Admin API endpoints
+
+All admin endpoints require the same Bearer token authentication as other endpoints.
+
+#### `GET /admin/logs?date=<YYYY-MM-DD>`
+Returns all observability log events stored for the given date (defaults to today, UTC).
+
+```bash
+curl "https://<worker-url>/admin/logs" \
+  -H "Authorization: Bearer <API_KEY>"
+```
+
+**Response:**
+```json
+{ "logs": [ { "id": "...", "type": "request", "level": "INFO", ... } ] }
+```
+
+#### `GET /admin/alerts`
+Returns all stored alerts, newest first.
+
+```bash
+curl "https://<worker-url>/admin/alerts" \
+  -H "Authorization: Bearer <API_KEY>"
+```
+
+**Response:**
+```json
+{ "alerts": [ { "id": "...", "type": "workflow_failed", "severity": "critical", ... } ] }
+```
+
+#### `GET /admin/abuse?ip=<ip-address>`
+Returns the abuse record for a specific IP address, or `null` if no abuse has been recorded.
+
+```bash
+curl "https://<worker-url>/admin/abuse?ip=1.2.3.4" \
+  -H "Authorization: Bearer <API_KEY>"
+```
+
+**Response:**
+```json
+{
+  "record": {
+    "ip": "1.2.3.4",
+    "authFailures": 3,
+    "rateLimitHits": 0,
+    "firstSeen": "...",
+    "lastSeen": "...",
+    "flagged": false
+  }
+}
+```
+
 

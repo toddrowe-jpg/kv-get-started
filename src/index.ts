@@ -15,6 +15,11 @@ import {
   PHASE_MODEL_REGISTRY,
 } from "./agentRegistry";
 import { buildOutlinePrompt, buildDraftPrompt, BlogBrief } from "./pythonPipelines";
+import {
+  ObservabilityStore,
+  isWorkflowStuck,
+  sendWebhookAlert,
+} from "./observability";
 
 export interface Env {
   AI: {
@@ -25,6 +30,8 @@ export interface Env {
   BLOG_WORKFLOW_STATE: KVNamespace;
   /** Optional Bearer token for API authentication. Set via: npx wrangler secret put API_KEY */
   API_KEY?: string;
+  /** Optional webhook URL for external alert notifications. Set via: npx wrangler secret put ALERT_WEBHOOK_URL */
+  ALERT_WEBHOOK_URL?: string;
 }
 
 /** Daily token limit used by the quota store (30 K tokens/day). */
@@ -48,20 +55,91 @@ export default {
 
     const { pathname, searchParams } = new URL(request.url);
 
+    // Observability store backed by the same KV namespace used for workflow state
+    const obs = new ObservabilityStore(env.BLOG_WORKFLOW_STATE);
+
     // Apply security middleware chain to all protected endpoints
     const chain = setupMiddlewareChain(env.API_KEY);
     const { allowed, context } = await chain.execute(request);
     requestLoggingMiddleware(request, context);
 
+    // Log every incoming request (non-blocking)
+    void obs.log({
+      type: "request",
+      level: "INFO",
+      context: "fetch",
+      data: {
+        requestId: context.requestId,
+        method: request.method,
+        pathname,
+        clientIp: context.clientIp,
+        authenticated: context.authenticated,
+      },
+    });
+
     if (!allowed) {
       if (context.rateLimited) {
+        // Track rate-limit hit and alert if the IP has been abusive
+        const abuse = await obs.trackRateLimit(context.clientIp);
+        void obs.log({
+          type: "rate_limited",
+          level: "WARN",
+          context: "ratelimit",
+          data: { requestId: context.requestId, clientIp: context.clientIp },
+        });
+        if (abuse.flagged) {
+          const alert = await obs.createAlert({
+            type: "abuse_detected",
+            severity: "critical",
+            message: `Abuse pattern detected from IP ${context.clientIp}: ${abuse.rateLimitHits} rate-limit hits`,
+            details: abuse,
+          });
+          if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
+        }
         return securityHeadersMiddleware(
           errorResponse(429, "Too Many Requests", context.requestId)
         );
       }
+      // Auth failure: track and alert if threshold is reached
+      const abuse = await obs.trackAuthFailure(context.clientIp);
+      void obs.log({
+        type: "auth_failure",
+        level: "WARN",
+        context: "auth",
+        data: { requestId: context.requestId, clientIp: context.clientIp },
+      });
+      if (abuse.flagged) {
+        const alert = await obs.createAlert({
+          type: "abuse_detected",
+          severity: "critical",
+          message: `Abuse pattern detected from IP ${context.clientIp}: ${abuse.authFailures} auth failures`,
+          details: abuse,
+        });
+        if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
+      }
       return securityHeadersMiddleware(
         errorResponse(401, "Unauthorized: valid Bearer token required", context.requestId)
       );
+    }
+
+    // ── Admin observability endpoints (require authentication) ──────────────
+
+    if (pathname === "/admin/logs") {
+      const date = searchParams.get("date") ?? undefined;
+      const logs = await obs.getLogs(date);
+      return securityHeadersMiddleware(jsonResponse({ logs }));
+    }
+
+    if (pathname === "/admin/alerts") {
+      const alerts = await obs.getAlerts();
+      return securityHeadersMiddleware(jsonResponse({ alerts }));
+    }
+
+    if (pathname === "/admin/abuse") {
+      const ip = searchParams.get("ip");
+      if (!ip) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: ip" }, 400));
+      const record = await obs.getAbuseRecord(ip);
+      return securityHeadersMiddleware(jsonResponse({ record }));
     }
 
     try {
@@ -249,6 +327,13 @@ export default {
           const message = err instanceof Error ? err.message : String(err);
           await store.setError(workflowId, "research", message);
           await store.addLog(workflowId, "research", "phase_failed", { error: message });
+          const alert = await obs.createAlert({
+            type: "workflow_failed",
+            severity: "critical",
+            message: `Workflow ${workflowId} failed at phase "research": ${message}`,
+            details: { workflowId, phase: "research", error: message },
+          });
+          if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
         }
 
         const state = await store.get(workflowId);
@@ -298,6 +383,13 @@ export default {
           const message = err instanceof Error ? err.message : String(err);
           await store.setError(workflowId, "outline", message);
           await store.addLog(workflowId, "outline", "phase_failed", { error: message });
+          const alert = await obs.createAlert({
+            type: "workflow_failed",
+            severity: "critical",
+            message: `Workflow ${workflowId} failed at phase "outline": ${message}`,
+            details: { workflowId, phase: "outline", error: message },
+          });
+          if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
         }
 
         const state = await store.get(workflowId);
@@ -347,6 +439,13 @@ export default {
           const message = err instanceof Error ? err.message : String(err);
           await store.setError(workflowId, "draft", message);
           await store.addLog(workflowId, "draft", "phase_failed", { error: message });
+          const alert = await obs.createAlert({
+            type: "workflow_failed",
+            severity: "critical",
+            message: `Workflow ${workflowId} failed at phase "draft": ${message}`,
+            details: { workflowId, phase: "draft", error: message },
+          });
+          if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
         }
 
         const state = await store.get(workflowId);
@@ -358,6 +457,16 @@ export default {
         const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
         const state = await store.get(workflowId);
         if (!state) return securityHeadersMiddleware(jsonResponse({ error: "Workflow not found" }, 404));
+        // Alert if workflow appears stuck (still running after threshold)
+        if (isWorkflowStuck(state)) {
+          const alert = await obs.createAlert({
+            type: "workflow_stuck",
+            severity: "warning",
+            message: `Workflow ${workflowId} has been in "running" state for more than 5 minutes`,
+            details: { workflowId, phase: state.currentPhase, updatedAt: state.updatedAt },
+          });
+          if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
+        }
         return securityHeadersMiddleware(jsonResponse(state));
       }
 
@@ -375,24 +484,52 @@ export default {
           "/workflow/blog/outline (POST)": "Run the outline pipeline (Python prompt) via Google Gemini",
           "/workflow/blog/draft (POST)": "Run the draft pipeline (Python prompt) via Google Gemini",
           "/workflow/:id (GET)": "Retrieve workflow state, phase outputs, logs, and errors",
+          "/admin/logs?date= (GET)": "Retrieve observability event logs for a given date (default: today)",
+          "/admin/alerts (GET)": "Retrieve all stored alerts",
+          "/admin/abuse?ip= (GET)": "Retrieve abuse record for a specific IP address",
         },
         phaseModelRegistry: PHASE_MODEL_REGISTRY,
       }));
     } catch (err) {
       if (err instanceof QuotaExceededError) {
+        void obs.log({ type: "quota_exceeded", level: "ERROR", context: pathname, data: { used: err.used, limit: err.limit } });
+        const alert = await obs.createAlert({
+          type: "quota_exceeded",
+          severity: "warning",
+          message: `Daily token quota exceeded on ${pathname}: ${err.used}/${err.limit} tokens used`,
+          details: { route: pathname, used: err.used, limit: err.limit },
+        });
+        if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
         return securityHeadersMiddleware(
           jsonResponse({ route: pathname, error: err.message, used: err.used, limit: err.limit }, 429)
         );
       }
       if (err instanceof PhaseModelMismatchError) {
+        void obs.log({ type: "error", level: "ERROR", context: pathname, data: { phase: err.phase, expectedModel: err.expectedModel } });
         return securityHeadersMiddleware(
           jsonResponse({ route: pathname, error: err.message, phase: err.phase, expectedModel: err.expectedModel }, 500)
         );
       }
       if (err instanceof GeminiApiError) {
+        void obs.log({ type: "error", level: "ERROR", context: pathname, data: { geminiStatus: err.geminiStatus, httpStatus: err.httpStatus, message: err.message } });
+        const alert = await obs.createAlert({
+          type: "api_error",
+          severity: err.httpStatus >= 500 ? "critical" : "warning",
+          message: `Gemini API error on ${pathname}: ${err.message}`,
+          details: { route: pathname, geminiStatus: err.geminiStatus, httpStatus: err.httpStatus },
+        });
+        if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
         return securityHeadersMiddleware(jsonResponse({ route: pathname, error: err.message }, err.httpStatus));
       }
       const message = err instanceof Error ? err.message : String(err);
+      void obs.log({ type: "error", level: "ERROR", context: pathname, data: { message } });
+      const alert = await obs.createAlert({
+        type: "api_error",
+        severity: "critical",
+        message: `Unhandled error on ${pathname}: ${message}`,
+        details: { route: pathname, error: message },
+      });
+      if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
       return securityHeadersMiddleware(jsonResponse({ route: pathname, error: message }, 500));
     }
   },

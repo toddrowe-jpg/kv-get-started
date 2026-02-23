@@ -1,5 +1,13 @@
 import { GeminiApiError, geminiGenerate } from "./gemini";
 import { WorkflowStore } from "./workflowStore";
+import {
+  setupMiddlewareChain,
+  securityHeadersMiddleware,
+  corsMiddleware,
+  errorResponse,
+  requestLoggingMiddleware,
+  sanitizeOutput,
+} from "./middleware";
 
 export interface Env {
   AI: {
@@ -8,10 +16,12 @@ export interface Env {
   GEMINI_API_KEY: string;
   /** KV namespace for persisting blog workflow state, logs, and errors. */
   BLOG_WORKFLOW_STATE: KVNamespace;
+  /** Optional Bearer token for API authentication. Set via: npx wrangler secret put API_KEY */
+  API_KEY?: string;
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
+  return new Response(JSON.stringify(sanitizeOutput(data)), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
@@ -22,54 +32,74 @@ function jsonResponse(data: unknown, status = 200): Response {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // Handle CORS preflight before any other processing
+    const corsResponse = corsMiddleware(request);
+    if (corsResponse) return corsResponse;
+
     const { pathname, searchParams } = new URL(request.url);
+
+    // Apply security middleware chain to all protected endpoints
+    const chain = setupMiddlewareChain(env.API_KEY);
+    const { allowed, context } = await chain.execute(request);
+    requestLoggingMiddleware(request, context);
+
+    if (!allowed) {
+      if (context.rateLimited) {
+        return securityHeadersMiddleware(
+          errorResponse(429, "Too Many Requests", context.requestId)
+        );
+      }
+      return securityHeadersMiddleware(
+        errorResponse(401, "Unauthorized: valid Bearer token required", context.requestId)
+      );
+    }
 
     try {
       if (pathname === "/research") {
         const q = searchParams.get("q");
-        if (!q) return jsonResponse({ error: "Missing required query param: q" }, 400);
+        if (!q) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: q" }, 400));
         const result = await env.AI.run("@cf/meta/llama-3.3-70b-instruct", {
           prompt: q,
           max_tokens: 800,
         });
-        return jsonResponse(result);
+        return securityHeadersMiddleware(jsonResponse(result));
       }
 
       if (pathname === "/summarize") {
         const text = searchParams.get("text");
-        if (!text) return jsonResponse({ error: "Missing required query param: text" }, 400);
+        if (!text) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: text" }, 400));
         const result = await env.AI.run("@cf/facebook/bart-large-cnn", {
           input_text: text,
         });
-        return jsonResponse(result);
+        return securityHeadersMiddleware(jsonResponse(result));
       }
 
       if (pathname === "/embed") {
         const text = searchParams.get("text");
-        if (!text) return jsonResponse({ error: "Missing required query param: text" }, 400);
+        if (!text) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: text" }, 400));
         const result = await env.AI.run("@cf/baai/bge-large-en-v1.5", {
           text,
         });
-        return jsonResponse(result);
+        return securityHeadersMiddleware(jsonResponse(result));
       }
 
       if (pathname === "/image") {
         const q = searchParams.get("q");
-        if (!q) return jsonResponse({ error: "Missing required query param: q" }, 400);
+        if (!q) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: q" }, 400));
         const result = await env.AI.run(
           "@cf/black-forest-labs/flux-1-schnell",
           { prompt: q }
         );
-        return jsonResponse(result);
+        return securityHeadersMiddleware(jsonResponse(result));
       }
 
       // --- Gemini endpoints ---
 
       if (pathname === "/gemini/research") {
-        if (!env.GEMINI_API_KEY) return jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503);
+        if (!env.GEMINI_API_KEY) return securityHeadersMiddleware(jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503));
         const q = searchParams.get("q");
-        if (!q) return jsonResponse({ error: "Missing required query param: q" }, 400);
-        if (q.length > 500) return jsonResponse({ error: "Query param q exceeds maximum length of 500 characters" }, 400);
+        if (!q) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: q" }, 400));
+        if (q.length > 500) return securityHeadersMiddleware(jsonResponse({ error: "Query param q exceeds maximum length of 500 characters" }, 400));
         const prompt =
           `You are a blog research assistant. Return a JSON object (no markdown fences) with the following keys:\n` +
           `"topic": the research topic,\n` +
@@ -85,40 +115,40 @@ export default {
         } catch {
           parsed = { raw };
         }
-        return jsonResponse(parsed);
+        return securityHeadersMiddleware(jsonResponse(parsed));
       }
 
       if (pathname === "/gemini/edit") {
-        if (request.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
-        if (!env.GEMINI_API_KEY) return jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503);
+        if (request.method !== "POST") return securityHeadersMiddleware(jsonResponse({ error: "Method not allowed" }, 405));
+        if (!env.GEMINI_API_KEY) return securityHeadersMiddleware(jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503));
         let body: { draft?: string };
         try {
           body = await request.json();
         } catch {
-          return jsonResponse({ error: "Invalid JSON body" }, 400);
+          return securityHeadersMiddleware(jsonResponse({ error: "Invalid JSON body" }, 400));
         }
-        if (!body.draft) return jsonResponse({ error: "Missing required field: draft" }, 400);
-        if (body.draft.length > 20000) return jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400);
+        if (!body.draft) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: draft" }, 400));
+        if (body.draft.length > 20000) return securityHeadersMiddleware(jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400));
         const prompt =
           `You are an expert blog editor. Revise the following blog draft to improve EEAT (Experience, Expertise, Authoritativeness, Trustworthiness), ` +
           `clarity, structure, and include a compelling call-to-action. ` +
           `Return only the revised Markdown text with no additional commentary.\n\n` +
           `DRAFT:\n${body.draft}`;
         const revised = await geminiGenerate(env.GEMINI_API_KEY, prompt, "edit");
-        return jsonResponse({ revised });
+        return securityHeadersMiddleware(jsonResponse({ revised }));
       }
 
       if (pathname === "/gemini/factcheck") {
-        if (request.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
-        if (!env.GEMINI_API_KEY) return jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503);
+        if (request.method !== "POST") return securityHeadersMiddleware(jsonResponse({ error: "Method not allowed" }, 405));
+        if (!env.GEMINI_API_KEY) return securityHeadersMiddleware(jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503));
         let body: { draft?: string; sources?: { url: string; title: string; text: string }[] };
         try {
           body = await request.json();
         } catch {
-          return jsonResponse({ error: "Invalid JSON body" }, 400);
+          return securityHeadersMiddleware(jsonResponse({ error: "Invalid JSON body" }, 400));
         }
-        if (!body.draft) return jsonResponse({ error: "Missing required field: draft" }, 400);
-        if (body.draft.length > 20000) return jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400);
+        if (!body.draft) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: draft" }, 400));
+        if (body.draft.length > 20000) return securityHeadersMiddleware(jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400));
         const sourcesText = (body.sources ?? [])
           .map((s, i) => {
             const title = typeof s.title === "string" ? s.title : "";
@@ -143,22 +173,22 @@ export default {
         } catch {
           parsed = { raw };
         }
-        return jsonResponse(parsed);
+        return securityHeadersMiddleware(jsonResponse(parsed));
       }
 
       // --- Blog workflow endpoints (KV-persisted) ---
 
       if (pathname === "/workflow/blog") {
-        if (request.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
-        if (!env.GEMINI_API_KEY) return jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503);
+        if (request.method !== "POST") return securityHeadersMiddleware(jsonResponse({ error: "Method not allowed" }, 405));
+        if (!env.GEMINI_API_KEY) return securityHeadersMiddleware(jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503));
         let body: { topic?: string };
         try {
           body = await request.json();
         } catch {
-          return jsonResponse({ error: "Invalid JSON body" }, 400);
+          return securityHeadersMiddleware(jsonResponse({ error: "Invalid JSON body" }, 400));
         }
-        if (!body.topic) return jsonResponse({ error: "Missing required field: topic" }, 400);
-        if (body.topic.length > 500) return jsonResponse({ error: "Field topic exceeds maximum length of 500 characters" }, 400);
+        if (!body.topic) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: topic" }, 400));
+        if (body.topic.length > 500) return securityHeadersMiddleware(jsonResponse({ error: "Field topic exceeds maximum length of 500 characters" }, 400));
 
         const workflowId = `wf_${Date.now()}_${crypto.randomUUID().split("-")[0]}`;
         const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
@@ -191,18 +221,18 @@ export default {
         }
 
         const state = await store.get(workflowId);
-        return jsonResponse({ workflowId, state });
+        return securityHeadersMiddleware(jsonResponse({ workflowId, state }));
       }
 
       if (pathname.startsWith("/workflow/") && pathname.length > "/workflow/".length) {
         const workflowId = pathname.slice("/workflow/".length);
         const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
         const state = await store.get(workflowId);
-        if (!state) return jsonResponse({ error: "Workflow not found" }, 404);
-        return jsonResponse(state);
+        if (!state) return securityHeadersMiddleware(jsonResponse({ error: "Workflow not found" }, 404));
+        return securityHeadersMiddleware(jsonResponse(state));
       }
 
-      return jsonResponse({
+      return securityHeadersMiddleware(jsonResponse({
         message: "Workers AI & Gemini endpoints",
         routes: {
           "/research?q=": "LLM research via @cf/meta/llama-3.3-70b-instruct",
@@ -215,13 +245,13 @@ export default {
           "/workflow/blog (POST)": "Start a persistent blog workflow execution",
           "/workflow/:id (GET)": "Retrieve workflow state, phase outputs, logs, and errors",
         },
-      });
+      }));
     } catch (err) {
       if (err instanceof GeminiApiError) {
-        return jsonResponse({ route: pathname, error: err.message }, err.httpStatus);
+        return securityHeadersMiddleware(jsonResponse({ route: pathname, error: err.message }, err.httpStatus));
       }
       const message = err instanceof Error ? err.message : String(err);
-      return jsonResponse({ route: pathname, error: message }, 500);
+      return securityHeadersMiddleware(jsonResponse({ route: pathname, error: message }, 500));
     }
   },
 };

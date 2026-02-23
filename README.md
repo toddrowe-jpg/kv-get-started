@@ -191,10 +191,42 @@ Returns `404` if the ID is not found.
 The workflow ID is returned by `POST /workflow/blog`. Store it and use `GET /workflow/:id` to inspect the execution at any later time. Because state is stored in KV, it survives worker restarts and is accessible across all requests.
 
 
-- JWT authentication for secure user sessions
-- Input validation to prevent XSS and SQL injection attacks
-- Rate limiting to prevent abuse of the API
-- `GEMINI_API_KEY` is stored as a Cloudflare secret and never logged or returned in responses
+## Security
+
+All protected endpoints enforce the following middleware pipeline on every request:
+
+### 1. Bearer Token Authentication
+Set the `API_KEY` secret to enable authentication. When set, every request must include a valid `Authorization: Bearer <key>` header or it will receive a `401 Unauthorized` response.
+
+```bash
+npx wrangler secret put API_KEY
+```
+
+If `API_KEY` is not configured the Worker operates in **open mode** (all requests are allowed), which is useful during local development.
+
+### 2. Rate Limiting
+A sliding-window rate limiter is enforced per client IP (via the `CF-Connecting-IP` header). Requests exceeding **60 per minute** receive a `429 Too Many Requests` response. The limiter tracks per-IP timestamps within a 60-second sliding window; timestamps older than the window are evicted on each check.
+
+### 3. Input Size Limiting
+Requests whose `Content-Length` header exceeds **1 MB** are rejected with a `413`-class error before the body is read. Individual endpoint fields also have their own size limits (e.g. `draft` ≤ 20 000 characters, query params ≤ 500 characters).
+
+### 4. Output Sanitization
+All JSON responses pass through `OutputSanitizer`, which automatically redacts any field whose name matches a known-sensitive pattern (`api_key`, `password`, `secret`, `credential`, `private_key`, `authorization`). This prevents accidental leakage of secrets in AI-generated content.
+
+### 5. Security Response Headers
+Every response includes the following hardened HTTP headers:
+
+| Header | Value |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `X-XSS-Protection` | `1; mode=block` |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
+| `Content-Security-Policy` | `default-src 'self'` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+
+### 6. CORS
+`OPTIONS` preflight requests are handled automatically and return the appropriate `Access-Control-Allow-*` headers.
 
 ## Deployment Guidelines
 To deploy the application:

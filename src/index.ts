@@ -1,35 +1,10 @@
+import { GeminiApiError, geminiGenerate } from "./gemini";
+
 export interface Env {
   AI: {
     run(model: string, input: unknown): Promise<unknown>;
   };
   GEMINI_API_KEY: string;
-}
-
-// --- Gemini helper ---
-
-const GEMINI_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent";
-
-async function geminiGenerate(apiKey: string, prompt: string): Promise<string> {
-  const res = await fetch(GEMINI_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": apiKey,
-    },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Gemini error ${res.status}: ${await res.text()}`);
-  }
-
-  const data: any = await res.json();
-  return (
-    data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("") ?? ""
-  ).trim();
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -100,7 +75,7 @@ export default {
           `"suggestedHeadings": an array of 4-6 H2 headings for a blog post,\n` +
           `"sources": an array of up to 5 suggested reference source titles.\n` +
           `Topic: ${q}`;
-        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt);
+        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt, "research");
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
@@ -126,7 +101,7 @@ export default {
           `clarity, structure, and include a compelling call-to-action. ` +
           `Return only the revised Markdown text with no additional commentary.\n\n` +
           `DRAFT:\n${body.draft}`;
-        const revised = await geminiGenerate(env.GEMINI_API_KEY, prompt);
+        const revised = await geminiGenerate(env.GEMINI_API_KEY, prompt, "edit");
         return jsonResponse({ revised });
       }
 
@@ -158,7 +133,7 @@ export default {
           `"suggestedRewrite": a corrected version of the claim tied to a provided source, or empty string if supported.\n\n` +
           `SOURCES:\n${sourcesText || "(none provided)"}\n\n` +
           `DRAFT:\n${body.draft}`;
-        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt);
+        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt, "factcheck");
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
@@ -181,6 +156,9 @@ export default {
         },
       });
     } catch (err) {
+      if (err instanceof GeminiApiError) {
+        return jsonResponse({ route: pathname, error: err.message }, err.httpStatus);
+      }
       const message = err instanceof Error ? err.message : String(err);
       return jsonResponse({ route: pathname, error: message }, 500);
     }

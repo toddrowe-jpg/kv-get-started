@@ -39,6 +39,12 @@ The application is built using a microservices architecture that allows independ
 
 ## API Endpoints
 
+### Orchestration (End-to-End Workflow)
+| Endpoint | Method | Description |
+|---|---|---|
+| `/workflow/execute` | POST | Run the **full workflow** (research → outline → draft) in a single call |
+| `/workflow/:id` | GET | Retrieve persisted workflow state, phase outputs, trace logs, and errors |
+
 ### Workers AI Endpoints
 | Endpoint | Method | Description |
 |---|---|---|
@@ -168,6 +174,56 @@ Replace the placeholder `id` in `wrangler.jsonc` with the ID printed by the comm
 
 ### Workflow API Endpoints
 
+#### `POST /workflow/execute`
+Runs the **full end-to-end blog workflow** in a single call, automatically chaining the research → outline → draft phases. State is persisted in KV after every phase, so the full execution record (including phase outputs, trace logs, and any errors) is available via `GET /workflow/:id` after the call completes.
+
+```bash
+curl -X POST "https://<worker-url>/workflow/execute" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "topic": "SBA 7(a) Loans for small businesses",
+    "audience": "small business owners",
+    "primary_keyword": "SBA 7(a) loans",
+    "goal": "educate and convert",
+    "angle": "practical guide",
+    "word_count": 1200,
+    "sources": ["SBA.gov", "Forbes Small Business"]
+  }'
+```
+
+**Required fields:** `topic`  
+**Optional fields (have defaults):** `audience`, `primary_keyword`, `goal`, `angle`, `word_count`, `sources`
+
+**Response:**
+```json
+{
+  "workflowId": "wf_1720000000000_abc12345",
+  "state": {
+    "id": "wf_1720000000000_abc12345",
+    "status": "completed",
+    "currentPhase": "draft",
+    "phaseOutputs": {
+      "research": { "topic": "...", "summary": "...", "keyPoints": ["..."], "suggestedHeadings": ["..."], "sources": ["..."] },
+      "outline": { "outline": "## Title Options\n1. ..." },
+      "draft": { "draft": "# SBA 7(a) Loans...\n\n..." }
+    },
+    "errors": [],
+    "traceLogs": [
+      { "timestamp": "...", "phase": "research", "event": "phase_started", "details": { "topic": "SBA 7(a) Loans..." } },
+      { "timestamp": "...", "phase": "research", "event": "phase_completed" },
+      { "timestamp": "...", "phase": "outline", "event": "phase_started", "details": { "topic": "SBA 7(a) Loans..." } },
+      { "timestamp": "...", "phase": "outline", "event": "phase_completed" },
+      { "timestamp": "...", "phase": "draft", "event": "phase_started", "details": { "topic": "SBA 7(a) Loans..." } },
+      { "timestamp": "...", "phase": "draft", "event": "phase_completed" }
+    ],
+    "createdAt": "...",
+    "updatedAt": "..."
+  }
+}
+```
+
+If any phase fails, the workflow `status` is set to `"failed"`, subsequent phases are skipped, and `errors` contains the error detail. The `workflowId` is always returned so you can inspect the partial state later.
+
 #### `POST /workflow/blog`
 Starts a new blog workflow execution. The research phase is run via Gemini and all outputs, logs, and errors are persisted to KV.
 
@@ -288,9 +344,45 @@ curl "https://<worker-url>/workflow/wf_1720000000000_abc12345"
 
 Returns `404` if the ID is not found.
 
-### Querying historical runs
+### Querying historical runs and accessing artifacts
 
-The workflow ID is returned by `POST /workflow/blog`. Store it and use `GET /workflow/:id` to inspect the execution at any later time. Because state is stored in KV, it survives worker restarts and is accessible across all requests.
+The workflow ID is returned by every `POST /workflow/*` endpoint. Store it and use `GET /workflow/:id` to inspect the execution at any later time. Because state is stored in KV, it survives worker restarts and is accessible across all requests.
+
+#### Accessing phase outputs (artifacts)
+
+Each phase output is stored under the `phaseOutputs` map in the `WorkflowEntry`. After a successful `POST /workflow/execute` call you can retrieve the generated draft like this:
+
+```bash
+# 1. Run the workflow and capture the workflow ID
+RESPONSE=$(curl -s -X POST "https://<worker-url>/workflow/execute" \
+  -H "Content-Type: application/json" \
+  -d '{"topic": "SBA 7(a) Loans for small businesses"}')
+WF_ID=$(echo "$RESPONSE" | jq -r '.workflowId')
+
+# 2. Retrieve the full state (includes all phase outputs)
+curl "https://<worker-url>/workflow/$WF_ID" | jq .
+
+# 3. Extract just the draft artifact
+curl "https://<worker-url>/workflow/$WF_ID" | jq '.phaseOutputs.draft.draft'
+```
+
+#### Accessing trace logs for debugging
+
+Every `phase_started`, `phase_completed`, and `phase_failed` event is recorded in `traceLogs`:
+
+```bash
+curl "https://<worker-url>/workflow/$WF_ID" | jq '.traceLogs'
+```
+
+Observability logs (request events, quota errors, etc.) are stored separately and accessible via the admin API:
+
+```bash
+# All logs for today
+curl "https://<worker-url>/admin/logs" -H "Authorization: Bearer <API_KEY>"
+
+# Logs for a specific date
+curl "https://<worker-url>/admin/logs?date=2025-01-15" -H "Authorization: Bearer <API_KEY>"
+```
 
 
 ## Security
@@ -385,7 +477,7 @@ Alerts are generated for the following conditions:
 
 | Alert type | Severity | Trigger |
 |---|---|---|
-| `workflow_failed` | critical | A workflow phase (`research`, `outline`, or `draft`) throws an error |
+| `workflow_failed` | critical | A workflow phase (`research`, `outline`, or `draft`) throws an error in any workflow endpoint |
 | `workflow_stuck` | warning | A workflow is still in `running` state > 5 minutes after its last update |
 | `quota_exceeded` | warning | Daily LLM token quota exceeded |
 | `api_error` | warning / critical | Gemini API error or unhandled exception in a request |

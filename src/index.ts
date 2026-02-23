@@ -452,6 +452,127 @@ export default {
         return securityHeadersMiddleware(jsonResponse({ workflowId, state }));
       }
 
+      if (pathname === "/workflow/execute") {
+        if (request.method !== "POST") return securityHeadersMiddleware(jsonResponse({ error: "Method not allowed" }, 405));
+        if (!env.GEMINI_API_KEY) return securityHeadersMiddleware(jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503));
+        let body: Partial<BlogBrief>;
+        try {
+          body = await request.json();
+        } catch {
+          return securityHeadersMiddleware(jsonResponse({ error: "Invalid JSON body" }, 400));
+        }
+        if (!body.topic) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: topic" }, 400));
+        if (String(body.topic).length > 500) return securityHeadersMiddleware(jsonResponse({ error: "Field topic exceeds maximum length of 500 characters" }, 400));
+
+        const brief: BlogBrief = {
+          topic: String(body.topic),
+          audience: typeof body.audience === "string" ? body.audience : "small business owners",
+          primary_keyword: typeof body.primary_keyword === "string" ? body.primary_keyword : String(body.topic),
+          goal: typeof body.goal === "string" ? body.goal : "educate and convert",
+          angle: typeof body.angle === "string" ? body.angle : "practical guide",
+          word_count: typeof body.word_count === "number" ? body.word_count : 1200,
+          sources: Array.isArray(body.sources) ? body.sources : [],
+        };
+
+        // Pre-flight quota check covering all three phases (≈2 000 tokens per phase × 3)
+        await quota.consumeTokens(6000, "workflow/execute");
+
+        const workflowId = `wf_${Date.now()}_${crypto.randomUUID().split("-")[0]}`;
+        const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
+        await store.create(workflowId, "research");
+
+        // ── Phase 1: Research ────────────────────────────────────────────────
+        await store.addLog(workflowId, "research", "phase_started", { topic: brief.topic });
+        let researchFailed = false;
+        let researchOutput: unknown = null;
+
+        try {
+          assertPhaseModel("research", "gemini-1.5-flash-latest");
+          const researchPrompt =
+            `You are a blog research assistant. Return a JSON object (no markdown fences) with the following keys:\n` +
+            `"topic": the research topic,\n` +
+            `"summary": a 2-3 sentence overview,\n` +
+            `"keyPoints": an array of 5 key points suitable for a blog outline,\n` +
+            `"suggestedHeadings": an array of 4-6 H2 headings for a blog post,\n` +
+            `"sources": an array of up to 5 suggested reference source titles.\n` +
+            `Topic: ${brief.topic}`;
+          const raw = await geminiGenerate(env.GEMINI_API_KEY, researchPrompt, "workflow/execute/research");
+          try {
+            researchOutput = JSON.parse(raw);
+          } catch {
+            researchOutput = { raw };
+          }
+          await store.setPhaseOutput(workflowId, "research", researchOutput);
+          await store.addLog(workflowId, "research", "phase_completed");
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await store.setError(workflowId, "research", message);
+          await store.addLog(workflowId, "research", "phase_failed", { error: message });
+          const alert = await obs.createAlert({
+            type: "workflow_failed",
+            severity: "critical",
+            message: `Workflow ${workflowId} failed at phase "research": ${message}`,
+            details: { workflowId, phase: "research", error: message },
+          });
+          if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
+          researchFailed = true;
+        }
+
+        // ── Phase 2: Outline ────────────────────────────────────────────────
+        let outlineFailed = false;
+        let outlineText = "";
+
+        if (!researchFailed) {
+          await store.addLog(workflowId, "outline", "phase_started", { topic: brief.topic });
+          try {
+            assertPhaseModel("outline", "gemini-1.5-flash-latest");
+            const outlinePrompt = buildOutlinePrompt(brief);
+            outlineText = await geminiGenerate(env.GEMINI_API_KEY, outlinePrompt, "workflow/execute/outline");
+            await store.setPhaseOutput(workflowId, "outline", { outline: outlineText });
+            await store.addLog(workflowId, "outline", "phase_completed");
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await store.setError(workflowId, "outline", message);
+            await store.addLog(workflowId, "outline", "phase_failed", { error: message });
+            const alert = await obs.createAlert({
+              type: "workflow_failed",
+              severity: "critical",
+              message: `Workflow ${workflowId} failed at phase "outline": ${message}`,
+              details: { workflowId, phase: "outline", error: message },
+            });
+            if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
+            outlineFailed = true;
+          }
+        }
+
+        // ── Phase 3: Draft ────────────────────────────────────────────────
+        if (!researchFailed && !outlineFailed) {
+          await store.addLog(workflowId, "draft", "phase_started", { topic: brief.topic });
+          try {
+            assertPhaseModel("draft", "gemini-1.5-flash-latest");
+            const draftPrompt = buildDraftPrompt(brief, outlineText);
+            const draft = await geminiGenerate(env.GEMINI_API_KEY, draftPrompt, "workflow/execute/draft");
+            await store.setPhaseOutput(workflowId, "draft", { draft });
+            await store.addLog(workflowId, "draft", "phase_completed");
+            await store.complete(workflowId);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await store.setError(workflowId, "draft", message);
+            await store.addLog(workflowId, "draft", "phase_failed", { error: message });
+            const alert = await obs.createAlert({
+              type: "workflow_failed",
+              severity: "critical",
+              message: `Workflow ${workflowId} failed at phase "draft": ${message}`,
+              details: { workflowId, phase: "draft", error: message },
+            });
+            if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
+          }
+        }
+
+        const state = await store.get(workflowId);
+        return securityHeadersMiddleware(jsonResponse({ workflowId, state }));
+      }
+
       if (pathname.startsWith("/workflow/") && pathname.length > "/workflow/".length) {
         const workflowId = pathname.slice("/workflow/".length);
         const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
@@ -483,6 +604,7 @@ export default {
           "/workflow/blog (POST)": "Start a persistent blog workflow execution (research phase)",
           "/workflow/blog/outline (POST)": "Run the outline pipeline (Python prompt) via Google Gemini",
           "/workflow/blog/draft (POST)": "Run the draft pipeline (Python prompt) via Google Gemini",
+          "/workflow/execute (POST)": "Run the full workflow end-to-end (research → outline → draft) in a single call",
           "/workflow/:id (GET)": "Retrieve workflow state, phase outputs, logs, and errors",
           "/admin/logs?date= (GET)": "Retrieve observability event logs for a given date (default: today)",
           "/admin/alerts (GET)": "Retrieve all stored alerts",

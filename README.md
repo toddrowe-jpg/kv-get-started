@@ -110,6 +110,38 @@ curl -X POST "https://<worker-url>/gemini/factcheck" \
 }
 ```
 
+## Role Separation Enforcement
+
+The Worker enforces **programmatic role separation** for every AI-backed workflow phase via `src/agentRegistry.ts`. Each phase is assigned exactly one designated model/agent in the `PHASE_MODEL_REGISTRY`. Before any AI call is made, `assertPhaseModel(phase, model)` is called to verify that the correct model is being used. If the wrong model is supplied, a `PhaseModelMismatchError` is thrown and the request returns a `500` response.
+
+### Phase–Model Registry
+
+| Phase | Designated Model/Agent | Description |
+|---|---|---|
+| `research` | `gemini-1.5-flash-latest` | Blog topic research via Google Gemini |
+| `outline` | `gemini-1.5-flash-latest` | Blog outline generation via Google Gemini |
+| `draft` | `gemini-1.5-flash-latest` | Full blog draft writing via Google Gemini |
+| `edit` | `gemini-1.5-flash-latest` | Blog draft editing via Google Gemini |
+| `factcheck` | `gemini-1.5-flash-latest` | Fact-checking against sources via Google Gemini |
+| `image` | `@cf/black-forest-labs/flux-1-schnell` | Image generation via Cloudflare Workers AI |
+| `summarize` | `@cf/facebook/bart-large-cnn` | Text summarization via Cloudflare Workers AI |
+
+The registry (`PHASE_MODEL_REGISTRY`) is exposed in the root endpoint response so clients can inspect the current assignments at runtime.
+
+To change a phase's model, update only `src/agentRegistry.ts`—all enforcement throughout the Worker is derived from that single source of truth.
+
+## Python Prompt Pipelines
+
+The prompt-building pipelines originally defined in `path/to/blog_writing_worker_direction.py` are ported to TypeScript in `src/pythonPipelines.ts` and exposed as REST endpoints so they can be triggered directly from the Worker:
+
+| Python function | TypeScript function | REST endpoint |
+|---|---|---|
+| `outline_prompt(brief)` | `buildOutlinePrompt(brief)` | `POST /workflow/blog/outline` |
+| `draft_prompt(brief, outline)` | `buildDraftPrompt(brief, outline)` | `POST /workflow/blog/draft` |
+| `system_prompt(style_guide, brand_kit)` | `buildSystemPrompt(styleGuide, brandKit)` | *(used internally)* |
+
+Each pipeline endpoint validates the `BlogBrief` input fields, enforces role separation via the agent registry, persists state to KV, and returns the full `WorkflowEntry` alongside the `workflowId`.
+
 ## Workflow Persistence (KV)
 
 Blog workflow executions are persisted in Cloudflare KV under the binding `BLOG_WORKFLOW_STATE`. Each run is stored as a JSON entry keyed by its workflow ID (`workflow:<id>`) and includes:
@@ -174,6 +206,76 @@ curl -X POST "https://<worker-url>/workflow/blog" \
 ```
 
 If the Gemini call fails the `status` will be `"failed"` and `errors` will contain the error detail.
+
+#### `POST /workflow/blog/outline`
+Runs the **outline pipeline** (ported from the Python prompt builder). Accepts a blog brief and returns a detailed outline including title options, meta description, H2/H3 structure, and a suggested CTA.
+
+```bash
+curl -X POST "https://<worker-url>/workflow/blog/outline" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "topic": "SBA 7(a) Loans for small businesses",
+    "audience": "small business owners",
+    "primary_keyword": "SBA 7(a) loans",
+    "goal": "educate and convert",
+    "angle": "practical guide",
+    "word_count": 1200,
+    "sources": ["SBA.gov", "Forbes Small Business"]
+  }'
+```
+
+**Required fields:** `topic`  
+**Optional fields (have defaults):** `audience`, `primary_keyword`, `goal`, `angle`, `word_count`, `sources`
+
+**Response:**
+```json
+{
+  "workflowId": "wf_...",
+  "state": {
+    "status": "completed",
+    "currentPhase": "outline",
+    "phaseOutputs": {
+      "outline": { "outline": "## Title Options\n1. ..." }
+    }
+  }
+}
+```
+
+#### `POST /workflow/blog/draft`
+Runs the **draft pipeline** (ported from the Python prompt builder). Accepts a blog brief plus a previously generated outline and returns the full Markdown blog post.
+
+```bash
+curl -X POST "https://<worker-url>/workflow/blog/draft" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "topic": "SBA 7(a) Loans for small businesses",
+    "audience": "small business owners",
+    "primary_keyword": "SBA 7(a) loans",
+    "goal": "educate and convert",
+    "angle": "practical guide",
+    "word_count": 1200,
+    "sources": [],
+    "outline": "## Introduction\n## What is an SBA 7(a) Loan?\n..."
+  }'
+```
+
+**Required fields:** `topic`, `outline`  
+**Optional fields (have defaults):** `audience`, `primary_keyword`, `goal`, `angle`, `word_count`, `sources`
+
+**Response:**
+```json
+{
+  "workflowId": "wf_...",
+  "state": {
+    "status": "completed",
+    "currentPhase": "draft",
+    "phaseOutputs": {
+      "draft": { "draft": "# SBA 7(a) Loans...\n\n..." }
+    }
+  }
+}
+```
+
 
 #### `GET /workflow/:id`
 Retrieves the full persisted state of a workflow execution (including all phase outputs, trace logs, and errors) by its ID.

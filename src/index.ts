@@ -1,10 +1,13 @@
 import { GeminiApiError, geminiGenerate } from "./gemini";
+import { WorkflowStore } from "./workflowStore";
 
 export interface Env {
   AI: {
     run(model: string, input: unknown): Promise<unknown>;
   };
   GEMINI_API_KEY: string;
+  /** KV namespace for persisting blog workflow state, logs, and errors. */
+  BLOG_WORKFLOW_STATE: KVNamespace;
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -143,6 +146,62 @@ export default {
         return jsonResponse(parsed);
       }
 
+      // --- Blog workflow endpoints (KV-persisted) ---
+
+      if (pathname === "/workflow/blog") {
+        if (request.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
+        if (!env.GEMINI_API_KEY) return jsonResponse({ error: "GEMINI_API_KEY not configured" }, 503);
+        let body: { topic?: string };
+        try {
+          body = await request.json();
+        } catch {
+          return jsonResponse({ error: "Invalid JSON body" }, 400);
+        }
+        if (!body.topic) return jsonResponse({ error: "Missing required field: topic" }, 400);
+        if (body.topic.length > 500) return jsonResponse({ error: "Field topic exceeds maximum length of 500 characters" }, 400);
+
+        const workflowId = `wf_${Date.now()}_${crypto.randomUUID().split("-")[0]}`;
+        const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
+        await store.create(workflowId, "research");
+        await store.addLog(workflowId, "research", "phase_started", { topic: body.topic });
+
+        try {
+          const researchPrompt =
+            `You are a blog research assistant. Return a JSON object (no markdown fences) with the following keys:\n` +
+            `"topic": the research topic,\n` +
+            `"summary": a 2-3 sentence overview,\n` +
+            `"keyPoints": an array of 5 key points suitable for a blog outline,\n` +
+            `"suggestedHeadings": an array of 4-6 H2 headings for a blog post,\n` +
+            `"sources": an array of up to 5 suggested reference source titles.\n` +
+            `Topic: ${body.topic}`;
+          const raw = await geminiGenerate(env.GEMINI_API_KEY, researchPrompt, "workflow/research");
+          let researchOutput: unknown;
+          try {
+            researchOutput = JSON.parse(raw);
+          } catch {
+            researchOutput = { raw };
+          }
+          await store.setPhaseOutput(workflowId, "research", researchOutput);
+          await store.addLog(workflowId, "research", "phase_completed");
+          await store.complete(workflowId);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await store.setError(workflowId, "research", message);
+          await store.addLog(workflowId, "research", "phase_failed", { error: message });
+        }
+
+        const state = await store.get(workflowId);
+        return jsonResponse({ workflowId, state });
+      }
+
+      if (pathname.startsWith("/workflow/") && pathname.length > "/workflow/".length) {
+        const workflowId = pathname.slice("/workflow/".length);
+        const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
+        const state = await store.get(workflowId);
+        if (!state) return jsonResponse({ error: "Workflow not found" }, 404);
+        return jsonResponse(state);
+      }
+
       return jsonResponse({
         message: "Workers AI & Gemini endpoints",
         routes: {
@@ -153,6 +212,8 @@ export default {
           "/gemini/research?q=": "Blog research outline via Google Gemini",
           "/gemini/edit (POST)": "Blog draft editing via Google Gemini",
           "/gemini/factcheck (POST)": "Fact-checking against sources via Google Gemini",
+          "/workflow/blog (POST)": "Start a persistent blog workflow execution",
+          "/workflow/:id (GET)": "Retrieve workflow state, phase outputs, logs, and errors",
         },
       });
     } catch (err) {

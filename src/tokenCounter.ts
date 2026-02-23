@@ -1,34 +1,57 @@
 import { InputValidator } from './security';
-import { SafeTokenMath } from './security';
 import { SecurityLogger } from './security';
+import { QuotaStore, QuotaExceededError } from './quotaStore';
 
-const logger = new SecurityLogger();
+export { QuotaExceededError };
 
+/**
+ * Tracks per-blog token usage and enforces daily quota via KV-backed
+ * {@link QuotaStore}.  Each call to {@link processTokens} validates its
+ * inputs, delegates the arithmetic to {@link SafeTokenMath}, persists the
+ * consumption in KV, and throws {@link QuotaExceededError} when the daily
+ * limit is breached.
+ */
 export class TokenCounter {
-    constructor() {
-        // Initialize properties if required
+    private readonly quotaStore: QuotaStore;
+
+    constructor(kv: KVNamespace, dailyLimit: number) {
+        this.quotaStore = new QuotaStore(kv, dailyLimit);
     }
 
-    public processTokens(blogId: string, tokensUsed: number, description: string): void {
+    /**
+     * Consumes `tokensUsed` tokens for `blogId` / `description`, persisting
+     * the updated daily total in KV.
+     *
+     * @throws {@link QuotaExceededError} when the daily limit would be exceeded.
+     */
+    public async processTokens(blogId: string, tokensUsed: number, description: string): Promise<{ used: number; remaining: number }> {
         // Validate inputs
-        if (!InputValidator.isValidString(blogId, 50)) {
-            logger.error('Invalid blogId');
+        const v = new InputValidator();
+        if (!v.validate(blogId) || typeof blogId !== 'string' || blogId.length > 50) {
+            SecurityLogger.error('TokenCounter', 'Invalid blogId');
             throw new Error('Invalid blogId');
         }
-        if (!InputValidator.isValidNumber(tokensUsed)) {
-            logger.error('Invalid tokensUsed');
+        if (typeof tokensUsed !== 'number' || !isFinite(tokensUsed) || tokensUsed < 0) {
+            SecurityLogger.error('TokenCounter', 'Invalid tokensUsed');
             throw new Error('Invalid tokensUsed');
         }
-        if (!InputValidator.isValidString(description, 255)) {
-            logger.error('Invalid description');
+        if (!v.validate(description) || typeof description !== 'string' || description.length > 255) {
+            SecurityLogger.error('TokenCounter', 'Invalid description');
             throw new Error('Invalid description');
         }
 
-        logger.info(`Processing tokens for blogId: ${blogId}`);
-        // Use SafeTokenMath for arithmetic operations
-        const newTotalTokens = SafeTokenMath.add(tokensUsed, 0); // Replace '0' with the current total if maintaining state
+        SecurityLogger.log('INFO', 'TokenCounter', { blogId, tokensUsed, description });
 
-        // Process the new total tokens as needed
-        logger.info(`New total tokens for blogId ${blogId} is ${newTotalTokens}`);
+        return this.quotaStore.consumeTokens(tokensUsed, `${blogId}:${description}`);
+    }
+
+    /** Returns the number of tokens consumed today. */
+    public async getDailyUsage(): Promise<number> {
+        return this.quotaStore.getDailyUsage();
+    }
+
+    /** Returns the number of tokens remaining for today. */
+    public async getRemainingTokens(): Promise<number> {
+        return this.quotaStore.getRemainingTokens();
     }
 }

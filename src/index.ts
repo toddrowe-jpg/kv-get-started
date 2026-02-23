@@ -1,5 +1,6 @@
 import { GeminiApiError, geminiGenerate } from "./gemini";
 import { WorkflowStore } from "./workflowStore";
+import { QuotaStore, QuotaExceededError } from "./quotaStore";
 import {
   setupMiddlewareChain,
   securityHeadersMiddleware,
@@ -19,6 +20,9 @@ export interface Env {
   /** Optional Bearer token for API authentication. Set via: npx wrangler secret put API_KEY */
   API_KEY?: string;
 }
+
+/** Daily token limit used by the quota store (30 K tokens/day). */
+const DAILY_TOKEN_LIMIT = 30_000;
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(sanitizeOutput(data)), {
@@ -55,9 +59,13 @@ export default {
     }
 
     try {
+      // Quota store shared across all AI endpoints for this request
+      const quota = new QuotaStore(env.BLOG_WORKFLOW_STATE, DAILY_TOKEN_LIMIT);
+
       if (pathname === "/research") {
         const q = searchParams.get("q");
         if (!q) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: q" }, 400));
+        await quota.consumeTokens(800, "research");
         const result = await env.AI.run("@cf/meta/llama-3.3-70b-instruct", {
           prompt: q,
           max_tokens: 800,
@@ -68,6 +76,7 @@ export default {
       if (pathname === "/summarize") {
         const text = searchParams.get("text");
         if (!text) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: text" }, 400));
+        await quota.consumeTokens(200, "summarize");
         const result = await env.AI.run("@cf/facebook/bart-large-cnn", {
           input_text: text,
         });
@@ -77,6 +86,7 @@ export default {
       if (pathname === "/embed") {
         const text = searchParams.get("text");
         if (!text) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: text" }, 400));
+        await quota.consumeTokens(100, "embed");
         const result = await env.AI.run("@cf/baai/bge-large-en-v1.5", {
           text,
         });
@@ -86,6 +96,7 @@ export default {
       if (pathname === "/image") {
         const q = searchParams.get("q");
         if (!q) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: q" }, 400));
+        await quota.consumeTokens(200, "image");
         const result = await env.AI.run(
           "@cf/black-forest-labs/flux-1-schnell",
           { prompt: q }
@@ -100,6 +111,7 @@ export default {
         const q = searchParams.get("q");
         if (!q) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: q" }, 400));
         if (q.length > 500) return securityHeadersMiddleware(jsonResponse({ error: "Query param q exceeds maximum length of 500 characters" }, 400));
+        await quota.consumeTokens(1500, "gemini/research");
         const prompt =
           `You are a blog research assistant. Return a JSON object (no markdown fences) with the following keys:\n` +
           `"topic": the research topic,\n` +
@@ -129,6 +141,7 @@ export default {
         }
         if (!body.draft) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: draft" }, 400));
         if (body.draft.length > 20000) return securityHeadersMiddleware(jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400));
+        await quota.consumeTokens(3000, "gemini/edit");
         const prompt =
           `You are an expert blog editor. Revise the following blog draft to improve EEAT (Experience, Expertise, Authoritativeness, Trustworthiness), ` +
           `clarity, structure, and include a compelling call-to-action. ` +
@@ -149,6 +162,7 @@ export default {
         }
         if (!body.draft) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: draft" }, 400));
         if (body.draft.length > 20000) return securityHeadersMiddleware(jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400));
+        await quota.consumeTokens(3000, "gemini/factcheck");
         const sourcesText = (body.sources ?? [])
           .map((s, i) => {
             const title = typeof s.title === "string" ? s.title : "";
@@ -189,6 +203,9 @@ export default {
         }
         if (!body.topic) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: topic" }, 400));
         if (body.topic.length > 500) return securityHeadersMiddleware(jsonResponse({ error: "Field topic exceeds maximum length of 500 characters" }, 400));
+
+        // Pre-flight quota check before starting the workflow
+        await quota.consumeTokens(1500, "workflow/research");
 
         const workflowId = `wf_${Date.now()}_${crypto.randomUUID().split("-")[0]}`;
         const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
@@ -247,6 +264,11 @@ export default {
         },
       }));
     } catch (err) {
+      if (err instanceof QuotaExceededError) {
+        return securityHeadersMiddleware(
+          jsonResponse({ route: pathname, error: err.message, used: err.used, limit: err.limit }, 429)
+        );
+      }
       if (err instanceof GeminiApiError) {
         return securityHeadersMiddleware(jsonResponse({ route: pathname, error: err.message }, err.httpStatus));
       }

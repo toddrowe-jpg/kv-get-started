@@ -8,6 +8,7 @@ export interface BlogWorkflowConfig {
 export interface BlogWorkflowState {
   currentPhase: string;
   tokensUsed: number;
+  tokensUsedByPhase: Record<string, number>;
   blogContent: string;
   category?: string;
   toddQuote?: string;
@@ -73,15 +74,53 @@ function generateToddRoweQuote(category: string): string {
 
 export class BlogWorkflowManager {
   private state: BlogWorkflowState;
+  readonly dailyLimit: number;
 
   constructor(config: BlogWorkflowConfig) {
+    this.dailyLimit = config.dailyLimit;
     this.state = {
       currentPhase: config.phases[0],
       tokensUsed: 0,
+      tokensUsedByPhase: {},
       blogContent: '',
       category: undefined,
       toddQuote: undefined
     };
+  }
+
+  /**
+   * Records tokens consumed by a specific phase and checks against the
+   * daily limit configured at construction time.
+   *
+   * This is an in-memory guard for a single workflow run. The persistent
+   * quota enforcement across all requests and restarts is handled by
+   * {@link QuotaStore} in the request handler, which is backed by KV.
+   * Both checks are intentional: this one provides per-workflow visibility
+   * and an early abort before additional KV operations, while QuotaStore
+   * ensures the cross-request daily total is never exceeded.
+   *
+   * Throws an error if the accumulated in-memory usage for this workflow
+   * run would exceed the configured daily limit.
+   */
+  recordPhaseTokens(phase: string, tokens: number): void {
+    if (this.state.tokensUsed + tokens > this.dailyLimit) {
+      throw new Error(
+        `Daily token limit exceeded: ${this.state.tokensUsed + tokens} tokens would exceed the ${this.dailyLimit} daily limit`
+      );
+    }
+    this.state.tokensUsedByPhase[phase] = (this.state.tokensUsedByPhase[phase] ?? 0) + tokens;
+    this.state.tokensUsed += tokens;
+    console.log(`[${phase}] Tokens used: ${tokens}. Workflow total: ${this.state.tokensUsed}/${this.dailyLimit}`);
+  }
+
+  /** Returns a read-only snapshot of per-phase token usage. */
+  getPhaseTokenUsage(): Readonly<Record<string, number>> {
+    return { ...this.state.tokensUsedByPhase };
+  }
+
+  /** Returns the total tokens consumed by this workflow run so far. */
+  getTotalTokensUsed(): number {
+    return this.state.tokensUsed;
   }
 
   research() {

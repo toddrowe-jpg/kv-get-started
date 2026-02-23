@@ -35,6 +35,27 @@ WordPress secrets (future use — do **not** commit; add via `wrangler secret pu
 - `WP_USERNAME` — WordPress application username
 - `WP_APP_PASSWORD` — WordPress application password
 
+### WhatsApp Cloud API Secrets
+
+Set all of the following via `wrangler secret put <NAME>` (never commit to source):
+
+| Secret | Description |
+|---|---|
+| `WHATSAPP_VERIFY_TOKEN` | Token you create; entered in Meta App Dashboard when registering webhook |
+| `WHATSAPP_APP_SECRET` | Meta App Secret (used to verify `X-Hub-Signature-256` on every POST) |
+| `WHATSAPP_TOKEN` | Permanent or system-user access token for sending messages |
+| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Business phone number ID from Meta dashboard |
+| `ADMIN_WHATSAPP_NUMBERS` | Comma-separated E.164 numbers allowed to issue commands, e.g. `+12032755433` |
+
+```bash
+wrangler secret put WHATSAPP_VERIFY_TOKEN
+wrangler secret put WHATSAPP_APP_SECRET
+wrangler secret put WHATSAPP_TOKEN
+wrangler secret put WHATSAPP_PHONE_NUMBER_ID
+wrangler secret put ADMIN_WHATSAPP_NUMBERS
+# When prompted, enter the value (e.g. for ADMIN_WHATSAPP_NUMBERS: +12032755433)
+```
+
 ## Job Pipeline Usage
 
 ### 1. Start a job
@@ -80,6 +101,73 @@ When a job is enqueued via `/start`, the Queue consumer:
 WordPress posting is **not yet implemented**. The job record already includes a `wp.baseUrl` placeholder (`https://www.bitxcapital.com`). When implemented, it will require:
 - `WP_USERNAME` secret
 - `WP_APP_PASSWORD` secret (WordPress Application Password)
+
+## WhatsApp Webhook
+
+Route: `bitxcapital.com/whatsapp/*`
+
+### Webhook verification (GET)
+Meta calls this when you register/edit the webhook in the App Dashboard:
+```
+GET /whatsapp/webhook?hub.mode=subscribe&hub.verify_token=<WHATSAPP_VERIFY_TOKEN>&hub.challenge=<challenge>
+```
+Returns the challenge as plain text with 200 if the token matches, otherwise 403.
+
+### Inbound messages (POST)
+Meta posts signed payloads here. Every request is validated with `X-Hub-Signature-256` (HMAC-SHA256 using `WHATSAPP_APP_SECRET`). Requests from senders not in `ADMIN_WHATSAPP_NUMBERS` are silently ACKed.
+
+Rate limit: 20 messages per 60 seconds per sender.
+
+### Available commands
+
+Send any of these as a WhatsApp message from an admin number:
+
+| Command | Description |
+|---|---|
+| `help` | List available commands |
+| `brand show` | Display stored brand profile |
+| `brand set name: <text>` | Set the brand name |
+| `brand set colors: #RRGGBB,#RRGGBB,...` | Set brand hex colors |
+| `plan generate 30: <seed topic>` | Generate a 30-day content plan (AI or stub) |
+| `plan list` | Show first 7 entries of the current plan |
+| `approve <jobId>` | Mark a job approved (persists to KV; does not publish) |
+| `reject <jobId> [reason]` | Mark a job rejected with optional reason |
+
+### KV schema
+
+| Key | Value | Description |
+|---|---|---|
+| `brand:profile` | JSON `{name, colors, updatedAt}` | Brand profile |
+| `plan:current` | JSON `{seed, createdAt, entries[]}` | 30-day content plan |
+| `job:<jobId>` | JSON `JobRecord` | Job state (extended with `approval`, `approvedBy`, etc.) |
+| `wa:rl:<sender>` | JSON `{count, windowStart}` | Per-sender rate limit window |
+
+### Example curl payloads (local dev)
+
+```bash
+# Webhook verification
+curl "http://localhost:8787/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=mytoken&hub.challenge=abc123"
+
+# Inbound message (requires valid HMAC — use wrangler dev with real secrets for testing)
+curl -X POST http://localhost:8787/whatsapp/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=<hmac>" \
+  -d '{
+    "entry": [{
+      "changes": [{
+        "value": {
+          "messages": [{
+            "from": "12032755433",
+            "id": "msg1",
+            "timestamp": "1700000000",
+            "type": "text",
+            "text": { "body": "help" }
+          }]
+        }
+      }]
+    }]
+  }'
+```
 
 ## Architecture
 Built on Cloudflare Workers using:

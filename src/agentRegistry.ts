@@ -15,7 +15,8 @@ export type WorkflowPhase =
   | "edit"
   | "factcheck"
   | "image"
-  | "summarize";
+  | "summarize"
+  | "compliance";
 
 /** Configuration entry for a single workflow phase. */
 export interface PhaseConfig {
@@ -67,6 +68,11 @@ export const PHASE_MODEL_REGISTRY: Readonly<Record<WorkflowPhase, PhaseConfig>> 
     phase: "summarize",
     model: "@cf/facebook/bart-large-cnn",
     description: "Text summarization via Cloudflare Workers AI",
+  },
+  compliance: {
+    phase: "compliance",
+    model: "rule-based",
+    description: "Compliance, SEO, grammar, and forbidden-phrase validation (deterministic rules, no AI model)",
   },
 };
 

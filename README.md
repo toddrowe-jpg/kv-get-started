@@ -620,7 +620,16 @@ When a client calls `GET /workflow/:id`, the Worker checks whether the workflow 
 
 ### Admin API endpoints
 
-All admin endpoints require the same Bearer token authentication as other endpoints.
+All admin endpoints require Bearer token authentication. By default they accept the general `API_KEY`. When `ADMIN_API_KEY` is set, admin routes require that dedicated token instead of the general key. If `CF_ACCESS_AUD` is also set, requests must additionally carry a valid `Cf-Access-Jwt-Assertion` header (Cloudflare Zero Trust).
+
+#### How operators are notified
+
+Operators can receive real-time alerts through two channels:
+
+1. **Webhook notifications** (push): Set `ALERT_WEBHOOK_URL` to receive an HTTP POST payload whenever a critical event occurs (workflow failure, quota exceeded, abuse detected, Gemini API error, stuck workflow). Compatible with Slack incoming webhooks, PagerDuty Events API, or any custom HTTP receiver.
+2. **Polling via admin endpoints** (pull): Use `GET /admin/alerts` to query all stored alerts at any time, or `GET /admin/status` to get a live dashboard view of all workflow runs.
+
+See the [External webhook notifications](#external-webhook-notifications) section above for the webhook payload shape.
 
 #### `GET /admin/logs?date=<YYYY-MM-DD>`
 Returns all observability log events stored for the given date (defaults to today, UTC).
@@ -669,5 +678,52 @@ curl "https://<worker-url>/admin/abuse?ip=1.2.3.4" \
   }
 }
 ```
+
+#### `GET /admin/status`
+Returns an aggregated dashboard view of all blog/content workflow runs — including counts by status, a list of stuck and failed workflows (with their errors), and the 20 most recent runs.
+
+```bash
+curl "https://<worker-url>/admin/status" \
+  -H "Authorization: Bearer <API_KEY>"
+```
+
+**Response:**
+```json
+{
+  "generatedAt": "2025-01-01T00:00:00.000Z",
+  "stats": {
+    "total": 42,
+    "running": 1,
+    "completed": 38,
+    "failed": 2,
+    "stuck": 1
+  },
+  "stuckWorkflows": [
+    {
+      "id": "wf_1720000000000_abc12345",
+      "status": "running",
+      "currentPhase": "outline",
+      "errors": [],
+      "traceLogs": [...],
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "failedWorkflows": [
+    {
+      "id": "wf_1719999990000_def67890",
+      "status": "failed",
+      "currentPhase": "research",
+      "errors": [{ "phase": "research", "message": "Gemini API quota exceeded", "timestamp": "..." }],
+      "traceLogs": [...],
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "recentWorkflows": [ ... ]
+}
+```
+
+A workflow is classified as **stuck** when it has been in `running` status for more than 5 minutes without an `updatedAt` refresh.
 
 

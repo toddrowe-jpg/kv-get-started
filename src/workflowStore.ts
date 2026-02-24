@@ -124,4 +124,24 @@ export class WorkflowStore {
       entry.status = "completed";
     });
   }
+
+  /**
+   * List all workflow entries stored in KV.
+   * Returns entries sorted by createdAt descending (newest first).
+   */
+  async list(): Promise<WorkflowEntry[]> {
+    const { keys } = await this.kv.list({ prefix: "workflow:" });
+    const raws = await Promise.all(keys.map((key) => this.kv.get(key.name)));
+    const entries: WorkflowEntry[] = [];
+    for (const raw of raws) {
+      if (raw) {
+        try {
+          entries.push(JSON.parse(raw) as WorkflowEntry);
+        } catch {
+          // skip malformed entries
+        }
+      }
+    }
+    return entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
 }

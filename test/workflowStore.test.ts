@@ -126,3 +126,79 @@ describe("WorkflowStore", () => {
     expect(entry?.traceLogs[1].event).toBe("phase_completed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// WorkflowStore.list() – needs a KV mock that supports prefix listing
+// ---------------------------------------------------------------------------
+
+function createListableMockKV(): KVNamespace {
+  const store = new Map<string, string>();
+  return {
+    get: async (key: string) => store.get(key) ?? null,
+    put: async (key: string, value: string) => {
+      store.set(key, value);
+    },
+    delete: async (key: string) => {
+      store.delete(key);
+    },
+    list: async (opts?: { prefix?: string }) => {
+      const prefix = opts?.prefix ?? "";
+      const keys = [...store.keys()]
+        .filter((k) => k.startsWith(prefix))
+        .map((name) => ({ name, expiration: undefined, metadata: null }));
+      return { keys, list_complete: true, cursor: "", cacheStatus: null };
+    },
+    getWithMetadata: async (key: string) => ({
+      value: store.get(key) ?? null,
+      metadata: null,
+      cacheStatus: null,
+    }),
+  } as unknown as KVNamespace;
+}
+
+describe("WorkflowStore.list", () => {
+  let listStore: WorkflowStore;
+
+  beforeEach(() => {
+    listStore = new WorkflowStore(createListableMockKV());
+  });
+
+  it("returns an empty array when no workflows have been created", async () => {
+    const entries = await listStore.list();
+    expect(entries).toEqual([]);
+  });
+
+  it("returns all created workflow entries", async () => {
+    await listStore.create("wf_a", "research");
+    await listStore.create("wf_b", "outline");
+    const entries = await listStore.list();
+    expect(entries).toHaveLength(2);
+    const ids = entries.map((e) => e.id);
+    expect(ids).toContain("wf_a");
+    expect(ids).toContain("wf_b");
+  });
+
+  it("returns entries sorted by createdAt descending (newest first)", async () => {
+    await listStore.create("wf_first", "research");
+    await new Promise((r) => setTimeout(r, 2));
+    await listStore.create("wf_second", "research");
+    const entries = await listStore.list();
+    expect(entries[0].id).toBe("wf_second");
+    expect(entries[1].id).toBe("wf_first");
+  });
+
+  it("reflects updated status after mutations", async () => {
+    await listStore.create("wf_c", "research");
+    await listStore.complete("wf_c");
+    const entries = await listStore.list();
+    expect(entries[0].status).toBe("completed");
+  });
+
+  it("includes failed workflows with their errors", async () => {
+    await listStore.create("wf_d", "research");
+    await listStore.setError("wf_d", "research", "something broke");
+    const entries = await listStore.list();
+    expect(entries[0].status).toBe("failed");
+    expect(entries[0].errors).toHaveLength(1);
+  });
+});

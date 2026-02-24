@@ -1,5 +1,5 @@
 import { GeminiApiError, geminiGenerate } from "./gemini";
-import { WorkflowStore } from "./workflowStore";
+import { WorkflowStore, type WorkflowEntry } from "./workflowStore";
 import { QuotaStore, QuotaExceededError } from "./quotaStore";
 import {
   setupMiddlewareChain,
@@ -167,6 +167,42 @@ export default {
       if (!ip) return securityHeadersMiddleware(jsonResponse({ error: "Missing required query param: ip" }, 400));
       const record = await obs.getAbuseRecord(ip);
       return securityHeadersMiddleware(jsonResponse({ record }));
+    }
+
+    if (pathname === "/admin/status") {
+      const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
+      const workflows = await store.list();
+      const now = Date.now();
+      const stats = {
+        total: workflows.length,
+        running: 0,
+        completed: 0,
+        failed: 0,
+        stuck: 0,
+      };
+      const stuckWorkflows: WorkflowEntry[] = [];
+      const failedWorkflows: WorkflowEntry[] = [];
+      for (const wf of workflows) {
+        if (wf.status === "running") {
+          stats.running++;
+          if (isWorkflowStuck(wf)) {
+            stats.stuck++;
+            stuckWorkflows.push(wf);
+          }
+        } else if (wf.status === "completed") {
+          stats.completed++;
+        } else if (wf.status === "failed") {
+          stats.failed++;
+          failedWorkflows.push(wf);
+        }
+      }
+      return securityHeadersMiddleware(jsonResponse({
+        generatedAt: new Date(now).toISOString(),
+        stats,
+        stuckWorkflows,
+        failedWorkflows,
+        recentWorkflows: workflows.slice(0, 20),
+      }));
     }
 
     try {
@@ -669,6 +705,7 @@ export default {
           "/admin/logs?date= (GET)": "Retrieve observability event logs for a given date (default: today)",
           "/admin/alerts (GET)": "Retrieve all stored alerts",
           "/admin/abuse?ip= (GET)": "Retrieve abuse record for a specific IP address",
+          "/admin/status (GET)": "Retrieve aggregated workflow run statistics (total, running, completed, failed, stuck)",
         },
         phaseModelRegistry: PHASE_MODEL_REGISTRY,
       }));

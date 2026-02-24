@@ -102,11 +102,14 @@ The application is built using a microservices architecture that allows independ
 #### `POST /wp/publish`
 Creates a post (draft or published) on the configured WordPress site via the REST API. Requires `WP_SITE_URL`, `WP_USER`, and `WP_APP_PASSWORD` secrets.
 
-The Worker composes the final HTML body before sending it to WordPress:
-1. Prepends an `<h1>` using `title` if the content lacks one.
-2. Appends an **Apply Now** CTA button (unless `includeApplyNowButton` is `false`).
-3. Appends a **Related Links** section when `relatedLinks` is provided.
-4. Appends an **FAQ** section when `faq` is provided (semantic HTML fallback — see note below).
+The Worker composes the final post content as **Gutenberg block markup** before sending it to WordPress:
+1. Prepends a `<!-- wp:heading {"level":1} -->` H1 block using `title` if the content lacks one.
+2. Wraps the caller-supplied HTML in a `<!-- wp:html -->` block.
+3. Appends an **Apply Now** CTA button block (unless `includeApplyNowButton` is `false`).
+4. Appends a **Related Links** heading + list block when `relatedLinks` is provided.
+5. Appends a **Yoast FAQ block** (`<!-- wp:yoast/faq-block … -->`) when `faq` is provided, enabling FAQPage schema on the frontend.
+
+> **Yoast FAQ block requirement:** The Yoast FAQ block requires the [Yoast SEO](https://yoast.com/wordpress/plugins/seo/) plugin with Gutenberg support installed on the target WordPress site. The Worker always outputs the `wp:yoast/faq-block` markup; if Yoast is not installed the content will be stored but schema markup will not be emitted on the frontend.
 
 **Minimal example:**
 ```bash
@@ -156,7 +159,7 @@ curl -X POST "https://<worker-url>/wp/publish" \
   }'
 ```
 
-**Required fields:** `title`, `contentHtml`  
+**Required fields:** `title`, and either `contentHtml` or `content` (alias)  
 **Optional fields:**
 
 | Field | Type | Default | Description |
@@ -168,10 +171,8 @@ curl -X POST "https://<worker-url>/wp/publish" \
 | `yoast.description` | `string` | — | Yoast meta description (`_yoast_wpseo_metadesc`) — max 320 chars |
 | `yoast.focuskw` | `string` | — | Yoast focus keyphrase (`_yoast_wpseo_focuskw`) — max 200 chars |
 | `relatedLinks` | `Array<{title, url}>` | — | Related links appended at the bottom (max 20) |
-| `faq` | `Array<{question, answerHtml?, answerText?}>` | — | FAQ items appended at the bottom (max 30) |
+| `faq` | `Array<{question, answerHtml?, answerText?}>` | — | FAQ items appended as a Yoast FAQ block (max 30) |
 | `includeApplyNowButton` | `boolean` | `true` | Append an "Apply Now" button to `https://bitxcapital.com/application-journey/` |
-
-> **Note on Yoast FAQ structured schema:** Yoast's rich-results FAQ schema requires the Gutenberg block editor and the Yoast SEO FAQ block. The Worker renders FAQ content as semantic HTML (`<section class="faq">`), which serves as a visual fallback. To enable Yoast FAQ rich results, replace the HTML in the WP editor with Gutenberg-serialised FAQ blocks after importing the post.
 
 **Response (201 Created):**
 ```json

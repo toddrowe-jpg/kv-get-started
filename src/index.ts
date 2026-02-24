@@ -735,15 +735,18 @@ export default {
         }
 
         if (!body.title) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: title" }, 400));
-        if (!body.contentHtml) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: contentHtml" }, 400));
+        // Accept either `contentHtml` or `content` (alias)
+        const rawBody = body as Record<string, unknown>;
+        const rawContent = body.contentHtml ?? (typeof rawBody.content === "string" ? rawBody.content : undefined);
+        if (!rawContent) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: contentHtml" }, 400));
         if (typeof body.title !== "string" || body.title.trim().length === 0) {
           return securityHeadersMiddleware(jsonResponse({ error: "Field title must be a non-empty string" }, 400));
         }
         if (body.title.length > WP_MAX_TITLE_LENGTH) return securityHeadersMiddleware(jsonResponse({ error: `Field title exceeds maximum length of ${WP_MAX_TITLE_LENGTH} characters` }, 400));
-        if (typeof body.contentHtml !== "string" || body.contentHtml.trim().length === 0) {
+        if (typeof rawContent !== "string" || rawContent.trim().length === 0) {
           return securityHeadersMiddleware(jsonResponse({ error: "Field contentHtml must be a non-empty string" }, 400));
         }
-        if (body.contentHtml.length > WP_MAX_CONTENT_LENGTH) return securityHeadersMiddleware(jsonResponse({ error: `Field contentHtml exceeds maximum length of ${WP_MAX_CONTENT_LENGTH} characters` }, 400));
+        if (rawContent.length > WP_MAX_CONTENT_LENGTH) return securityHeadersMiddleware(jsonResponse({ error: `Field contentHtml exceeds maximum length of ${WP_MAX_CONTENT_LENGTH} characters` }, 400));
         if (
           body.status !== undefined &&
           !["draft", "publish", "pending", "private"].includes(body.status)
@@ -823,7 +826,7 @@ export default {
 
         const input: WpPublishInput = {
           title: body.title.trim(),
-          contentHtml: body.contentHtml,
+          contentHtml: rawContent,
           status: body.status ?? "draft",
           categories: Array.isArray(body.categories) ? body.categories : [],
           tags: Array.isArray(body.tags) ? body.tags : [],
@@ -852,7 +855,7 @@ export default {
           "/workflow/blog/draft (POST)": "Run the draft pipeline (Python prompt) via Google Gemini",
           "/workflow/execute (POST)": "Run the full workflow end-to-end (research → outline → draft) in a single call",
           "/workflow/:id (GET)": "Retrieve workflow state, phase outputs, logs, and errors",
-          "/wp/publish (POST)": "Publish or draft a post to WordPress with optional Yoast SEO meta, Apply Now button, Related Links, and FAQ sections",
+          "/wp/publish (POST)": "Publish or draft a post to WordPress as Gutenberg blocks with optional Yoast SEO meta, Apply Now button, Related Links, and Yoast FAQ block",
           "/admin/logs?date= (GET)": "Retrieve observability event logs for a given date (default: today)",
           "/admin/alerts (GET)": "Retrieve all stored alerts",
           "/admin/abuse?ip= (GET)": "Retrieve abuse record for a specific IP address",

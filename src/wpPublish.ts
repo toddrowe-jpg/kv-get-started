@@ -32,6 +32,8 @@ export interface WpPublishInput {
   title: string;
   /** HTML content for the post body */
   contentHtml: string;
+  /** Alias for contentHtml (either field is accepted) */
+  content?: string;
   /** WordPress post status (default: "draft") */
   status?: "draft" | "publish" | "pending" | "private";
   /** Array of category names to assign */
@@ -73,6 +75,89 @@ export function escapeHtml(text: string): string {
 }
 
 /**
+ * Compose post content as Gutenberg block markup.
+ *
+ * Order of appended sections:
+ *   1. Optional leading H1 block (prepended when the content has no <h1>)
+ *   2. Caller-supplied HTML wrapped in a wp:html block
+ *   3. "Apply Now" CTA button block (unless includeApplyNowButton === false)
+ *   4. Related Links heading + list blocks (when relatedLinks provided)
+ *   5. Yoast FAQ block (when faq provided)
+ *
+ * NOTE: The Yoast FAQ block (wp:yoast/faq-block) requires the Yoast SEO
+ * plugin with Gutenberg support installed on the target WordPress site.
+ * The block markup is always output; if Yoast is not installed the content
+ * will be stored but schema markup will not be emitted on the frontend.
+ */
+export function buildContentBlocks(input: WpPublishInput): string {
+  const html = input.contentHtml;
+  const blocks: string[] = [];
+
+  // Ensure a single H1: prepend one using the post title when none exists
+  if (!/<h1[\s>]/i.test(html)) {
+    blocks.push(
+      `<!-- wp:heading {"level":1} -->\n<h1 class="wp-block-heading">${escapeHtml(input.title)}</h1>\n<!-- /wp:heading -->`,
+    );
+  }
+
+  // Wrap caller-supplied HTML in a custom HTML block to preserve formatting
+  blocks.push(`<!-- wp:html -->\n${html}\n<!-- /wp:html -->`);
+
+  // "Apply Now" CTA button block
+  if (input.includeApplyNowButton !== false) {
+    blocks.push(
+      `<!-- wp:buttons -->\n<div class="wp-block-buttons"><!-- wp:button {"className":"apply-now-button"} -->\n<div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="${APPLY_NOW_URL}">Apply Now</a></div>\n<!-- /wp:button --></div>\n<!-- /wp:buttons -->`,
+    );
+  }
+
+  // Related Links section
+  if (input.relatedLinks && input.relatedLinks.length > 0) {
+    const listItems = input.relatedLinks
+      .map(
+        (l) =>
+          `<!-- wp:list-item -->\n<li><a href="${escapeHtml(l.url)}">${escapeHtml(l.title)}</a></li>\n<!-- /wp:list-item -->`,
+      )
+      .join("\n");
+    blocks.push(
+      `<!-- wp:heading {"level":2} -->\n<h2 class="wp-block-heading">Related Links</h2>\n<!-- /wp:heading -->`,
+      `<!-- wp:list -->\n<ul class="wp-block-list">\n${listItems}\n</ul>\n<!-- /wp:list -->`,
+    );
+  }
+
+  // Yoast FAQ block
+  if (input.faq && input.faq.length > 0) {
+    const faqItems = input.faq.map((f, i) => {
+      const id = `faq-question-${i + 1}`;
+      const answerInline = f.answerHtml
+        ? f.answerHtml
+        : f.answerText
+          ? escapeHtml(f.answerText)
+          : "";
+      const answerBlock = f.answerHtml
+        ? f.answerHtml
+        : `<p class="schema-faq-answer">${f.answerText ? escapeHtml(f.answerText) : ""}</p>`;
+      return { id, question: escapeHtml(f.question), answerInline, answerBlock };
+    });
+    const questions = faqItems.map(({ id, question, answerInline }) => ({
+      id,
+      question: [question],
+      answer: [answerInline],
+    }));
+    const faqSections = faqItems
+      .map(
+        ({ id, question, answerBlock }) =>
+          `<div class="schema-faq-section" id="${id}">\n<strong class="schema-faq-question">${question}</strong>\n${answerBlock}\n</div>`,
+      )
+      .join("\n");
+    blocks.push(
+      `<!-- wp:yoast/faq-block ${JSON.stringify({ questions })} -->\n<div class="schema-faq wp-block-yoast-faq-block">\n${faqSections}\n</div>\n<!-- /wp:yoast/faq-block -->`,
+    );
+  }
+
+  return blocks.join("\n\n");
+}
+
+/**
  * Compose the final HTML body from the input fields.
  *
  * Order of appended sections:
@@ -82,12 +167,7 @@ export function escapeHtml(text: string): string {
  *   4. Related Links section (when relatedLinks provided)
  *   5. FAQ section (when faq provided)
  *
- * NOTE on Yoast FAQ schema: Yoast's structured FAQ schema (HowTo/FAQ block)
- * requires the Gutenberg block editor and the Yoast SEO FAQ block. This
- * implementation renders FAQ content as semantic HTML which works as a visual
- * fallback.  To enable Yoast FAQ rich results, replace the HTML below with
- * Gutenberg-serialised FAQ blocks or use the Yoast SEO FAQ block in the WP
- * editor after importing the post.
+ * @deprecated Use buildContentBlocks for Gutenberg block output.
  */
 export function buildContentHtml(input: WpPublishInput): string {
   let html = input.contentHtml;
@@ -265,8 +345,8 @@ export async function wpPublishPost(
     authHeader,
   );
 
-  // Build final HTML content (H1 injection, Apply Now button, Related Links, FAQ)
-  const finalContent = buildContentHtml(input);
+  // Build final content as Gutenberg blocks (H1 injection, Apply Now button, Related Links, FAQ)
+  const finalContent = buildContentBlocks(input);
 
   // Create the post
   const postPayload: Record<string, unknown> = {

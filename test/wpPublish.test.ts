@@ -5,6 +5,7 @@ import {
   WpPublishError,
   resolveTermIds,
   buildContentHtml,
+  buildContentBlocks,
   escapeHtml,
   APPLY_NOW_URL,
 } from "../src/wpPublish";
@@ -476,5 +477,147 @@ describe("wpPublishPost with Yoast meta", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildContentBlocks
+// ---------------------------------------------------------------------------
+describe("buildContentBlocks", () => {
+  it("output contains Gutenberg block delimiters", () => {
+    const out = buildContentBlocks({ title: "T", contentHtml: "<p>body</p>" });
+    expect(out).toContain("<!-- wp:");
+    expect(out).toContain("<!-- /wp:");
+  });
+
+  it("prepends an H1 block when content lacks one", () => {
+    const out = buildContentBlocks({ title: "My Title", contentHtml: "<p>Body</p>" });
+    expect(out).toContain('<!-- wp:heading {"level":1} -->');
+    expect(out).toContain('<h1 class="wp-block-heading">My Title</h1>');
+    expect(out).toContain("<!-- /wp:heading -->");
+    expect(out.indexOf("<!-- wp:heading")).toBeLessThan(out.indexOf("<!-- wp:html -->"));
+  });
+
+  it("does not prepend an H1 block when content already has one", () => {
+    const out = buildContentBlocks({
+      title: "My Title",
+      contentHtml: "<h1>Existing H1</h1><p>Body</p>",
+    });
+    expect(out.match(/<h1/gi)?.length).toBe(1);
+    expect(out).not.toContain("<!-- wp:heading");
+  });
+
+  it("wraps caller HTML in a wp:html block", () => {
+    const out = buildContentBlocks({ title: "T", contentHtml: "<p>content</p>" });
+    expect(out).toContain("<!-- wp:html -->");
+    expect(out).toContain("<p>content</p>");
+    expect(out).toContain("<!-- /wp:html -->");
+  });
+
+  it("appends Apply Now button block by default", () => {
+    const out = buildContentBlocks({ title: "T", contentHtml: "<p>x</p>" });
+    expect(out).toContain("<!-- wp:buttons -->");
+    expect(out).toContain("<!-- wp:button");
+    expect(out).toContain(`href="${APPLY_NOW_URL}"`);
+    expect(out).toContain("Apply Now");
+  });
+
+  it("omits Apply Now block when includeApplyNowButton is false", () => {
+    const out = buildContentBlocks({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      includeApplyNowButton: false,
+    });
+    expect(out).not.toContain("Apply Now");
+    expect(out).not.toContain("<!-- wp:buttons -->");
+  });
+
+  it("appends Related Links as Gutenberg heading + list blocks", () => {
+    const out = buildContentBlocks({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      relatedLinks: [
+        { title: "Link One", url: "https://example.com/one" },
+        { title: "Link Two", url: "https://example.com/two" },
+      ],
+    });
+    expect(out).toContain('<!-- wp:heading {"level":2} -->');
+    expect(out).toContain('<h2 class="wp-block-heading">Related Links</h2>');
+    expect(out).toContain("<!-- wp:list -->");
+    expect(out).toContain("<!-- wp:list-item -->");
+    expect(out).toContain("https://example.com/one");
+    expect(out).toContain("Link One");
+    expect(out).toContain("https://example.com/two");
+    expect(out).toContain("Link Two");
+  });
+
+  it("does not append a Related Links block when relatedLinks is empty", () => {
+    const out = buildContentBlocks({ title: "T", contentHtml: "<p>x</p>", relatedLinks: [] });
+    expect(out).not.toContain("Related Links");
+    expect(out).not.toContain("<!-- wp:list -->");
+  });
+
+  it("appends Yoast FAQ block when faq is provided", () => {
+    const out = buildContentBlocks({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      faq: [{ question: "What is X?", answerHtml: "<p>X is great</p>" }],
+    });
+    expect(out).toContain("<!-- wp:yoast/faq-block");
+    expect(out).toContain("<!-- /wp:yoast/faq-block -->");
+    expect(out).toContain('"questions"');
+    expect(out).toContain("What is X?");
+    expect(out).toContain("schema-faq wp-block-yoast-faq-block");
+    expect(out).toContain("schema-faq-section");
+    expect(out).toContain("schema-faq-question");
+  });
+
+  it("Yoast FAQ block encodes answerText (escaped)", () => {
+    const out = buildContentBlocks({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      faq: [{ question: "Who?", answerText: "I am <you>" }],
+    });
+    expect(out).toContain("I am &lt;you&gt;");
+    expect(out).toContain("schema-faq-answer");
+  });
+
+  it("Yoast FAQ block contains the correct block comment markers and attributes", () => {
+    const out = buildContentBlocks({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      faq: [
+        { question: "Q1?", answerText: "A1" },
+        { question: "Q2?", answerText: "A2" },
+      ],
+    });
+    expect(out).toMatch(/<!-- wp:yoast\/faq-block \{.*"questions".*\} -->/);
+    expect(out).toContain('"id":"faq-question-1"');
+    expect(out).toContain('"id":"faq-question-2"');
+    expect(out).toContain('id="faq-question-1"');
+    expect(out).toContain('id="faq-question-2"');
+  });
+
+  it("escapes HTML in title when prepending H1 block", () => {
+    const out = buildContentBlocks({ title: "Loans & <Mortgages>", contentHtml: "<p>x</p>" });
+    expect(out).toContain("Loans &amp; &lt;Mortgages&gt;");
+  });
+
+  it("sections appear in correct order: H1 block, HTML block, Apply Now, Related Links, FAQ", () => {
+    const out = buildContentBlocks({
+      title: "T",
+      contentHtml: "<p>body</p>",
+      relatedLinks: [{ title: "L", url: "https://example.com" }],
+      faq: [{ question: "Q?", answerText: "A" }],
+    });
+    const h1Pos = out.indexOf("<!-- wp:heading");
+    const htmlPos = out.indexOf("<!-- wp:html -->");
+    const applyPos = out.indexOf("Apply Now");
+    const relatedPos = out.indexOf("Related Links");
+    const faqPos = out.indexOf("wp:yoast/faq-block");
+    expect(h1Pos).toBeLessThan(htmlPos);
+    expect(htmlPos).toBeLessThan(applyPos);
+    expect(applyPos).toBeLessThan(relatedPos);
+    expect(relatedPos).toBeLessThan(faqPos);
   });
 });

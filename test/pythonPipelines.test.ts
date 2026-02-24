@@ -3,6 +3,8 @@ import {
   buildOutlinePrompt,
   buildDraftPrompt,
   buildSystemPrompt,
+  validateNoDashes,
+  runComplianceChecks,
   BlogBrief,
 } from "../src/pythonPipelines";
 
@@ -131,5 +133,92 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt({}, {});
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateNoDashes
+// ---------------------------------------------------------------------------
+
+describe("validateNoDashes", () => {
+  it("does not throw for content without forbidden dashes", () => {
+    expect(() => validateNoDashes("Hello - world")).not.toThrow();
+  });
+
+  it("does not throw for an empty string", () => {
+    expect(() => validateNoDashes("")).not.toThrow();
+  });
+
+  it("throws when an em-dash is present", () => {
+    expect(() => validateNoDashes("Hello\u2014world")).toThrow(/forbidden dash/);
+  });
+
+  it("throws when an en-dash is present", () => {
+    expect(() => validateNoDashes("2020\u20132021")).toThrow(/forbidden dash/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runComplianceChecks
+// ---------------------------------------------------------------------------
+
+describe("runComplianceChecks", () => {
+  it("returns an empty array for clean content", () => {
+    const violations = runComplianceChecks("# SBA Loans\n\nSBA 7(a) loans are great.");
+    expect(violations).toHaveLength(0);
+  });
+
+  it("flags em-dash as a violation", () => {
+    const violations = runComplianceChecks("A great option\u2014truly.");
+    const dashViolation = violations.find((v) => v.rule === "no_forbidden_dashes");
+    expect(dashViolation).toBeDefined();
+  });
+
+  it("flags en-dash as a violation", () => {
+    const violations = runComplianceChecks("Years 2020\u20132021 were tough.");
+    const dashViolation = violations.find((v) => v.rule === "no_forbidden_dashes");
+    expect(dashViolation).toBeDefined();
+  });
+
+  it("flags missing primary keyword when keyword is supplied", () => {
+    const violations = runComplianceChecks("# Blog post\n\nSome content here.", "SBA 7(a) loans");
+    const kwViolation = violations.find((v) => v.rule === "keyword_present");
+    expect(kwViolation).toBeDefined();
+    expect(kwViolation!.message).toContain("SBA 7(a) loans");
+  });
+
+  it("does not flag keyword when it is present (case-insensitive)", () => {
+    const violations = runComplianceChecks("# Blog\n\nSBA 7(A) LOANS are helpful.", "SBA 7(a) loans");
+    const kwViolation = violations.find((v) => v.rule === "keyword_present");
+    expect(kwViolation).toBeUndefined();
+  });
+
+  it("skips keyword check when no keyword is supplied", () => {
+    const violations = runComplianceChecks("# Blog\n\nSome content.");
+    expect(violations.find((v) => v.rule === "keyword_present")).toBeUndefined();
+  });
+
+  it("flags empty content", () => {
+    const violations = runComplianceChecks("   ");
+    const emptyViolation = violations.find((v) => v.rule === "non_empty_content");
+    expect(emptyViolation).toBeDefined();
+  });
+
+  it("returns multiple violations when several rules fail", () => {
+    const violations = runComplianceChecks("A\u2014B", "missing-keyword");
+    // em-dash violation + keyword missing = exactly 2 violations; content is not empty
+    expect(violations).toHaveLength(2);
+    expect(violations.some((v) => v.rule === "no_forbidden_dashes")).toBe(true);
+    expect(violations.some((v) => v.rule === "keyword_present")).toBe(true);
+  });
+
+  it("each violation has a non-empty rule and message", () => {
+    const violations = runComplianceChecks("A\u2014B", "missing-keyword");
+    for (const v of violations) {
+      expect(typeof v.rule).toBe("string");
+      expect(v.rule.length).toBeGreaterThan(0);
+      expect(typeof v.message).toBe("string");
+      expect(v.message.length).toBeGreaterThan(0);
+    }
   });
 });

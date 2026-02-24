@@ -16,7 +16,7 @@ import {
   PhaseModelMismatchError,
   PHASE_MODEL_REGISTRY,
 } from "./agentRegistry";
-import { buildOutlinePrompt, buildDraftPrompt, BlogBrief } from "./pythonPipelines";
+import { buildOutlinePrompt, buildDraftPrompt, BlogBrief, runComplianceChecks } from "./pythonPipelines";
 import {
   ObservabilityStore,
   isWorkflowStuck,
@@ -573,15 +573,16 @@ export default {
         }
 
         // ── Phase 3: Draft ────────────────────────────────────────────────
+        let draftText = "";
+        let draftFailed = false;
         if (!researchFailed && !outlineFailed) {
           await store.addLog(workflowId, "draft", "phase_started", { topic: brief.topic });
           try {
             assertPhaseModel("draft", "gemini-1.5-flash-latest");
             const draftPrompt = buildDraftPrompt(brief, outlineText);
-            const draft = await geminiGenerate(env.GEMINI_API_KEY, draftPrompt, "workflow/execute/draft");
-            await store.setPhaseOutput(workflowId, "draft", { draft });
+            draftText = await geminiGenerate(env.GEMINI_API_KEY, draftPrompt, "workflow/execute/draft");
+            await store.setPhaseOutput(workflowId, "draft", { draft: draftText });
             await store.addLog(workflowId, "draft", "phase_completed");
-            await store.complete(workflowId);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             await store.setError(workflowId, "draft", message);
@@ -593,6 +594,38 @@ export default {
               details: { workflowId, phase: "draft", error: message },
             });
             if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
+            draftFailed = true;
+          }
+        }
+
+        // ── Phase 4: Compliance ─────────────────────────────────────────────
+        // Rule-based compliance, SEO, grammar, and forbidden-phrase validation.
+        // Violations are logged to KV but do NOT fail the workflow so that all
+        // issues are surfaced to the caller even when the draft is otherwise good.
+        if (!researchFailed && !outlineFailed && !draftFailed) {
+          await store.addLog(workflowId, "compliance", "phase_started", { topic: brief.topic });
+          let complianceFailed = false;
+          try {
+            assertPhaseModel("compliance", "rule-based");
+            const violations = runComplianceChecks(draftText, brief.primary_keyword);
+            for (const v of violations) {
+              await store.addLog(workflowId, "compliance", "violation_found", {
+                rule: v.rule,
+                message: v.message,
+              });
+            }
+            await store.setPhaseOutput(workflowId, "compliance", { violations });
+            await store.addLog(workflowId, "compliance", "phase_completed", {
+              violationCount: violations.length,
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await store.setError(workflowId, "compliance", message);
+            await store.addLog(workflowId, "compliance", "phase_failed", { error: message });
+            complianceFailed = true;
+          }
+          if (!complianceFailed) {
+            await store.complete(workflowId);
           }
         }
 

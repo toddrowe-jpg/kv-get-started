@@ -153,3 +153,27 @@ describe("PhaseModelMismatchError", () => {
     expect(err.actualModel).toBe("dall-e-3");
   });
 });
+
+// ---------------------------------------------------------------------------
+// compliance phase
+// ---------------------------------------------------------------------------
+
+describe("compliance phase", () => {
+  it("is present in PHASE_MODEL_REGISTRY", () => {
+    expect(PHASE_MODEL_REGISTRY["compliance"]).toBeDefined();
+  });
+
+  it('uses the "rule-based" model designation (no AI model required)', () => {
+    expect(PHASE_MODEL_REGISTRY["compliance"].model).toBe("rule-based");
+  });
+
+  it("assertPhaseModel passes for compliance with rule-based", () => {
+    expect(() => assertPhaseModel("compliance", "rule-based")).not.toThrow();
+  });
+
+  it("assertPhaseModel throws for compliance when an AI model is supplied", () => {
+    expect(() => assertPhaseModel("compliance", "gemini-1.5-flash-latest")).toThrow(
+      PhaseModelMismatchError
+    );
+  });
+});

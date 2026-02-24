@@ -162,6 +162,7 @@ The Worker enforces **programmatic role separation** for every AI-backed workflo
 | `factcheck` | `gemini-1.5-flash-latest` | Fact-checking against sources via Google Gemini |
 | `image` | `@cf/black-forest-labs/flux-1-schnell` | Image generation via Cloudflare Workers AI |
 | `summarize` | `@cf/facebook/bart-large-cnn` | Text summarization via Cloudflare Workers AI |
+| `compliance` | `rule-based` | Compliance, SEO, grammar, and forbidden-phrase validation (deterministic rules, no AI model) |
 
 The registry (`PHASE_MODEL_REGISTRY`) is exposed in the root endpoint response so clients can inspect the current assignments at runtime.
 
@@ -176,8 +177,22 @@ The prompt-building pipelines originally defined in `path/to/blog_writing_worker
 | `outline_prompt(brief)` | `buildOutlinePrompt(brief)` | `POST /workflow/blog/outline` |
 | `draft_prompt(brief, outline)` | `buildDraftPrompt(brief, outline)` | `POST /workflow/blog/draft` |
 | `system_prompt(style_guide, brand_kit)` | `buildSystemPrompt(styleGuide, brandKit)` | *(used internally)* |
+| `validate_no_dashes(md)` | `validateNoDashes(md)` | *(invoked in compliance phase)* |
+| *(suite of validators)* | `runComplianceChecks(md, primaryKeyword?)` | *(invoked in compliance phase)* |
 
 Each pipeline endpoint validates the `BlogBrief` input fields, enforces role separation via the agent registry, persists state to KV, and returns the full `WorkflowEntry` alongside the `workflowId`.
+
+### Compliance Validators
+
+`runComplianceChecks(md, primaryKeyword?)` collects all violations without throwing, so every issue is surfaced at once. It runs the following rules (ported from the Python validator suite):
+
+| Rule ID | Description |
+|---|---|
+| `no_forbidden_dashes` | No em-dash (—) or en-dash (–) characters allowed |
+| `keyword_present` | Primary SEO keyword must appear in the content (case-insensitive) |
+| `non_empty_content` | Draft must not be empty |
+
+Each violation is a `ComplianceViolation` object `{ rule: string; message: string }`. All violations are stored in `phaseOutputs.compliance.violations` and individually logged as `violation_found` trace events in the KV workflow record.
 
 ## Workflow Persistence (KV)
 
@@ -232,11 +247,12 @@ curl -X POST "https://<worker-url>/workflow/execute" \
   "state": {
     "id": "wf_1720000000000_abc12345",
     "status": "completed",
-    "currentPhase": "draft",
+    "currentPhase": "compliance",
     "phaseOutputs": {
       "research": { "topic": "...", "summary": "...", "keyPoints": ["..."], "suggestedHeadings": ["..."], "sources": ["..."] },
       "outline": { "outline": "## Title Options\n1. ..." },
-      "draft": { "draft": "# SBA 7(a) Loans...\n\n..." }
+      "draft": { "draft": "# SBA 7(a) Loans...\n\n..." },
+      "compliance": { "violations": [] }
     },
     "errors": [],
     "traceLogs": [
@@ -245,7 +261,9 @@ curl -X POST "https://<worker-url>/workflow/execute" \
       { "timestamp": "...", "phase": "outline", "event": "phase_started", "details": { "topic": "SBA 7(a) Loans..." } },
       { "timestamp": "...", "phase": "outline", "event": "phase_completed" },
       { "timestamp": "...", "phase": "draft", "event": "phase_started", "details": { "topic": "SBA 7(a) Loans..." } },
-      { "timestamp": "...", "phase": "draft", "event": "phase_completed" }
+      { "timestamp": "...", "phase": "draft", "event": "phase_completed" },
+      { "timestamp": "...", "phase": "compliance", "event": "phase_started", "details": { "topic": "SBA 7(a) Loans..." } },
+      { "timestamp": "...", "phase": "compliance", "event": "phase_completed", "details": { "violationCount": 0 } }
     ],
     "createdAt": "...",
     "updatedAt": "..."

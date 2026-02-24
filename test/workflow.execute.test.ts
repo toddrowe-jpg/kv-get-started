@@ -220,4 +220,55 @@ describe("POST /workflow/execute", () => {
     const body = await res.json() as { state: { status: string } };
     expect(body.state.status).toBe("completed");
   });
+
+  it("runs compliance phase after draft and stores violations in phaseOutputs", async () => {
+    let callIndex = 0;
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callIndex += 1;
+      if (callIndex === 1) return Promise.resolve(makeGeminiResponse(MOCK_RESEARCH_JSON));
+      if (callIndex === 2) return Promise.resolve(makeGeminiResponse("## Outline\n1. Intro"));
+      // Draft with an em-dash so a compliance violation is produced
+      return Promise.resolve(makeGeminiResponse("# Blog Post\n\nA great option\u2014truly."));
+    });
+
+    const res = await postExecute({ topic: "SBA Loans" }, env);
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      state: {
+        status: string;
+        phaseOutputs: Record<string, { violations?: Array<{ rule: string }> }>;
+        traceLogs: Array<{ phase: string; event: string }>;
+      };
+    };
+
+    expect(body.state.status).toBe("completed");
+    expect(body.state.phaseOutputs).toHaveProperty("compliance");
+    expect(body.state.phaseOutputs.compliance.violations).toBeDefined();
+    expect(body.state.phaseOutputs.compliance.violations!.length).toBeGreaterThan(0);
+    // Compliance phase should be logged
+    expect(body.state.traceLogs.some((l) => l.phase === "compliance" && l.event === "phase_started")).toBe(true);
+    expect(body.state.traceLogs.some((l) => l.phase === "compliance" && l.event === "phase_completed")).toBe(true);
+  });
+
+  it("skips compliance phase when draft fails", async () => {
+    let callIndex = 0;
+    globalThis.fetch = vi.fn().mockImplementation(() => {
+      callIndex += 1;
+      if (callIndex === 1) return Promise.resolve(makeGeminiResponse(MOCK_RESEARCH_JSON));
+      if (callIndex === 2) return Promise.resolve(makeGeminiResponse("## Outline"));
+      // Draft call returns an error
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ error: { code: 500, status: "INTERNAL", message: "Draft error" } }),
+          { status: 500, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    });
+
+    const res = await postExecute({ topic: "SBA" }, env);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { state: { status: string; phaseOutputs: Record<string, unknown> } };
+    expect(body.state.status).toBe("failed");
+    expect(body.state.phaseOutputs).not.toHaveProperty("compliance");
+  });
 });

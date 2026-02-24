@@ -110,3 +110,83 @@ Requirements:
 - Naturally include the primary keyword (no stuffing).
 Return only the Markdown blog post.`.trim();
 }
+
+// ---------------------------------------------------------------------------
+// Compliance validators (ported from path/to/blog_writing_worker_direction.py)
+// ---------------------------------------------------------------------------
+
+/** Forbidden dash characters mirroring Python's DASH_FORBIDDEN constant. */
+const DASH_FORBIDDEN = ["\u2014", "\u2013"] as const; // em-dash, en-dash
+
+/** A single compliance or validation violation found in a blog draft. */
+export interface ComplianceViolation {
+  /** Short identifier for the rule that was violated. */
+  rule: string;
+  /** Human-readable description of the violation. */
+  message: string;
+}
+
+/**
+ * Validates that `md` contains no em-dash (—) or en-dash (–) characters.
+ * Mirrors Python `validate_no_dashes(md)`.
+ *
+ * @throws {Error} if a forbidden dash character is found.
+ */
+export function validateNoDashes(md: string): void {
+  for (const ch of DASH_FORBIDDEN) {
+    if (md.includes(ch)) {
+      throw new Error("Found forbidden dash character (\u2014 or \u2013).");
+    }
+  }
+}
+
+/**
+ * Runs all compliance checks on `md` and returns an array of violations.
+ * Violations are collected (not thrown) so all issues can be reported at once.
+ * Mirrors the suite of validators in `path/to/blog_writing_worker_direction.py`.
+ *
+ * Checks performed:
+ *  1. No forbidden dash characters (em-dash or en-dash).
+ *  2. Primary keyword present at least once (when `primaryKeyword` is supplied).
+ *  3. Content is not empty.
+ *
+ * @param md             - The Markdown content to validate.
+ * @param primaryKeyword - Optional primary SEO keyword that must appear in `md`.
+ */
+export function runComplianceChecks(
+  md: string,
+  primaryKeyword?: string,
+): ComplianceViolation[] {
+  const violations: ComplianceViolation[] = [];
+
+  // Rule 1: no forbidden dash characters
+  for (const ch of DASH_FORBIDDEN) {
+    if (md.includes(ch)) {
+      violations.push({
+        rule: "no_forbidden_dashes",
+        message: `Forbidden dash character found: "${ch}" (em-dash or en-dash is not allowed).`,
+      });
+      break; // one violation per rule is enough
+    }
+  }
+
+  // Rule 2: primary keyword must appear in the content
+  if (primaryKeyword && primaryKeyword.trim().length > 0) {
+    if (!md.toLowerCase().includes(primaryKeyword.toLowerCase())) {
+      violations.push({
+        rule: "keyword_present",
+        message: `Primary keyword "${primaryKeyword}" not found in the draft.`,
+      });
+    }
+  }
+
+  // Rule 3: content must not be empty
+  if (md.trim().length === 0) {
+    violations.push({
+      rule: "non_empty_content",
+      message: "Draft content is empty.",
+    });
+  }
+
+  return violations;
+}

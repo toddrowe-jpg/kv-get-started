@@ -28,6 +28,9 @@ All API and model credentials **must** be stored as Cloudflare Worker secrets an
 | `ADMIN_API_KEY` | Recommended | Separate Bearer token for `/admin/*` endpoints (Zero Trust) |
 | `CF_ACCESS_AUD` | Optional | Cloudflare Access audience tag for Zero Trust JWT enforcement |
 | `ALERT_WEBHOOK_URL` | Optional | Webhook URL for external alert delivery |
+| `WP_SITE_URL` | Yes (for `/wp/publish`) | WordPress site base URL, e.g. `https://example.kinsta.cloud` |
+| `WP_USER` | Yes (for `/wp/publish`) | WordPress username that owns the Application Password |
+| `WP_APP_PASSWORD` | Yes (for `/wp/publish`) | WordPress Application Password (spaces are stripped automatically) |
 
 ### `GEMINI_API_KEY`
 Required for the `/gemini/*` endpoints. Obtain an API key from [Google AI Studio](https://aistudio.google.com/app/apikey) and add it as a Cloudflare secret:
@@ -59,6 +62,30 @@ Optional Cloudflare Zero Trust audience tag. When set, admin and workflow-trigge
 npx wrangler secret put CF_ACCESS_AUD
 ```
 
+### `WP_SITE_URL`
+Base URL of the WordPress site (no trailing slash) targeted by the `/wp/publish` endpoint.
+
+```bash
+npx wrangler secret put WP_SITE_URL
+# e.g. https://bitxcapital.kinsta.cloud
+```
+
+### `WP_USER`
+WordPress username that owns the Application Password used for REST API authentication.
+
+```bash
+npx wrangler secret put WP_USER
+# e.g. bitx-worker
+```
+
+### `WP_APP_PASSWORD`
+WordPress [Application Password](https://make.wordpress.org/core/2020/11/05/application-passwords-integration-guide/) for the user above. Application Passwords are displayed with spaces for readability; the Worker strips spaces automatically before encoding the credential.
+
+```bash
+npx wrangler secret put WP_APP_PASSWORD
+# paste the Application Password (spaces are fine)
+```
+
 ## Architecture
 The application is built using a microservices architecture that allows independent scaling and development of different components. It leverages Node.js for the server-side logic and MongoDB for data storage.
 
@@ -69,6 +96,45 @@ The application is built using a microservices architecture that allows independ
 - Publishing onto the BITX Capital blog
 
 ## API Endpoints
+
+### WordPress Publishing Endpoint
+
+#### `POST /wp/publish`
+Creates a post (draft or published) on the configured WordPress site via the REST API. Requires `WP_SITE_URL`, `WP_USER`, and `WP_APP_PASSWORD` secrets.
+
+```bash
+curl -X POST "https://<worker-url>/wp/publish" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <API_KEY>" \
+  -d '{
+    "title": "My New Post",
+    "contentHtml": "<p>This is the post body in HTML.</p>",
+    "status": "draft",
+    "categories": ["Finance", "Crypto"],
+    "tags": ["bitcoin", "defi"]
+  }'
+```
+
+**Required fields:** `title`, `contentHtml`  
+**Optional fields:** `status` (`draft` | `publish` | `pending` | `private`, default `draft`), `categories` (array of names), `tags` (array of names)
+
+**Response (201 Created):**
+```json
+{
+  "postId": 42,
+  "wpLink": "https://bitxcapital.kinsta.cloud/?p=42",
+  "status": "draft",
+  "categoryIds": [3, 7],
+  "tagIds": [12]
+}
+```
+
+Category and tag names that do not yet exist in WordPress are created automatically. Existing terms are resolved by name (case-insensitive) or slug.
+
+**Error responses:**
+- `400 Bad Request` — missing or invalid fields (e.g. `title`, `contentHtml`, bad `status` value)
+- `503 Service Unavailable` — `WP_SITE_URL`, `WP_USER`, or `WP_APP_PASSWORD` not configured
+- `4xx/502` — WordPress returned an error (propagated with `wpStatus` and `error` fields)
 
 ### Orchestration (End-to-End Workflow)
 | Endpoint | Method | Description |
@@ -531,15 +597,21 @@ To deploy the application:
    npx wrangler secret put API_KEY
    npx wrangler secret put ADMIN_API_KEY
    ```
-2. **(Optional) Set the alert webhook URL:**
+2. **(Optional) Set WordPress publishing secrets:**
+   ```bash
+   npx wrangler secret put WP_SITE_URL
+   npx wrangler secret put WP_USER
+   npx wrangler secret put WP_APP_PASSWORD
+   ```
+3. **(Optional) Set the alert webhook URL:**
    ```bash
    npx wrangler secret put ALERT_WEBHOOK_URL
    ```
-3. **(Optional) Configure Zero Trust for admin endpoints:**
+4. **(Optional) Configure Zero Trust for admin endpoints:**
    ```bash
    npx wrangler secret put CF_ACCESS_AUD
    ```
-4. **Deploy:**
+5. **Deploy:**
    ```bash
    npm run deploy
    ```

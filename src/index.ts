@@ -1,6 +1,7 @@
 import { GeminiApiError, geminiGenerate } from "./gemini";
 import { WorkflowStore, type WorkflowEntry } from "./workflowStore";
 import { QuotaStore, QuotaExceededError } from "./quotaStore";
+import { wpPublishPost, WpPublishError, type WpPublishInput } from "./wpPublish";
 import {
   setupMiddlewareChain,
   securityHeadersMiddleware,
@@ -50,10 +51,31 @@ export interface Env {
   CF_ACCESS_AUD?: string;
   /** Optional webhook URL for external alert notifications. Set via: npx wrangler secret put ALERT_WEBHOOK_URL */
   ALERT_WEBHOOK_URL?: string;
+  /**
+   * WordPress site base URL (no trailing slash), e.g. https://example.kinsta.cloud
+   * Set via: npx wrangler secret put WP_SITE_URL
+   */
+  WP_SITE_URL?: string;
+  /**
+   * WordPress username that owns the Application Password.
+   * Set via: npx wrangler secret put WP_USER
+   */
+  WP_USER?: string;
+  /**
+   * WordPress Application Password for the user above.
+   * Spaces are stripped automatically before use.
+   * Set via: npx wrangler secret put WP_APP_PASSWORD
+   */
+  WP_APP_PASSWORD?: string;
 }
 
 /** Daily token limit used by the quota store (30 K tokens/day). */
 const DAILY_TOKEN_LIMIT = 30_000;
+
+/** Maximum allowed length for a WordPress post title. */
+const WP_MAX_TITLE_LENGTH = 1_000;
+/** Maximum allowed length for a WordPress post HTML content body. */
+const WP_MAX_CONTENT_LENGTH = 200_000;
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(sanitizeOutput(data)), {
@@ -687,6 +709,50 @@ export default {
         return securityHeadersMiddleware(jsonResponse(state));
       }
 
+      // --- WordPress publishing endpoint ---
+
+      if (pathname === "/wp/publish") {
+        if (request.method !== "POST") return securityHeadersMiddleware(jsonResponse({ error: "Method not allowed" }, 405));
+        if (!env.WP_SITE_URL) return securityHeadersMiddleware(jsonResponse({ error: "WP_SITE_URL not configured" }, 503));
+        if (!env.WP_USER) return securityHeadersMiddleware(jsonResponse({ error: "WP_USER not configured" }, 503));
+        if (!env.WP_APP_PASSWORD) return securityHeadersMiddleware(jsonResponse({ error: "WP_APP_PASSWORD not configured" }, 503));
+
+        let body: Partial<WpPublishInput>;
+        try {
+          body = await request.json();
+        } catch {
+          return securityHeadersMiddleware(jsonResponse({ error: "Invalid JSON body" }, 400));
+        }
+
+        if (!body.title) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: title" }, 400));
+        if (!body.contentHtml) return securityHeadersMiddleware(jsonResponse({ error: "Missing required field: contentHtml" }, 400));
+        if (typeof body.title !== "string" || body.title.trim().length === 0) {
+          return securityHeadersMiddleware(jsonResponse({ error: "Field title must be a non-empty string" }, 400));
+        }
+        if (body.title.length > WP_MAX_TITLE_LENGTH) return securityHeadersMiddleware(jsonResponse({ error: `Field title exceeds maximum length of ${WP_MAX_TITLE_LENGTH} characters` }, 400));
+        if (typeof body.contentHtml !== "string" || body.contentHtml.trim().length === 0) {
+          return securityHeadersMiddleware(jsonResponse({ error: "Field contentHtml must be a non-empty string" }, 400));
+        }
+        if (body.contentHtml.length > WP_MAX_CONTENT_LENGTH) return securityHeadersMiddleware(jsonResponse({ error: `Field contentHtml exceeds maximum length of ${WP_MAX_CONTENT_LENGTH} characters` }, 400));
+        if (
+          body.status !== undefined &&
+          !["draft", "publish", "pending", "private"].includes(body.status)
+        ) {
+          return securityHeadersMiddleware(jsonResponse({ error: "Field status must be one of: draft, publish, pending, private" }, 400));
+        }
+
+        const input: WpPublishInput = {
+          title: body.title.trim(),
+          contentHtml: body.contentHtml,
+          status: body.status ?? "draft",
+          categories: Array.isArray(body.categories) ? body.categories : [],
+          tags: Array.isArray(body.tags) ? body.tags : [],
+        };
+
+        const result = await wpPublishPost(env.WP_SITE_URL, env.WP_USER, env.WP_APP_PASSWORD, input);
+        return securityHeadersMiddleware(jsonResponse(result, 201));
+      }
+
       return securityHeadersMiddleware(jsonResponse({
         message: "Workers AI & Gemini endpoints",
         routes: {
@@ -702,6 +768,7 @@ export default {
           "/workflow/blog/draft (POST)": "Run the draft pipeline (Python prompt) via Google Gemini",
           "/workflow/execute (POST)": "Run the full workflow end-to-end (research → outline → draft) in a single call",
           "/workflow/:id (GET)": "Retrieve workflow state, phase outputs, logs, and errors",
+          "/wp/publish (POST)": "Publish or draft a post to the configured WordPress site",
           "/admin/logs?date= (GET)": "Retrieve observability event logs for a given date (default: today)",
           "/admin/alerts (GET)": "Retrieve all stored alerts",
           "/admin/abuse?ip= (GET)": "Retrieve abuse record for a specific IP address",
@@ -739,6 +806,12 @@ export default {
         });
         if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
         return securityHeadersMiddleware(jsonResponse({ route: pathname, error: err.message }, err.httpStatus));
+      }
+      if (err instanceof WpPublishError) {
+        void obs.log({ type: "error", level: "ERROR", context: pathname, data: { wpStatus: err.wpStatus, message: err.message } });
+        // Propagate 4xx errors from WP as-is; map 5xx and unexpected status codes to 502
+        const httpStatus = err.wpStatus >= 400 && err.wpStatus < 500 ? err.wpStatus : 502;
+        return securityHeadersMiddleware(jsonResponse({ route: pathname, error: err.message, wpStatus: err.wpStatus }, httpStatus));
       }
       const message = err instanceof Error ? err.message : String(err);
       void obs.log({ type: "error", level: "ERROR", context: pathname, data: { message } });

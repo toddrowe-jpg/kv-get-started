@@ -1,7 +1,7 @@
 import { GeminiApiError, geminiGenerate } from "./gemini";
 import { WorkflowStore, type WorkflowEntry } from "./workflowStore";
 import { QuotaStore, QuotaExceededError } from "./quotaStore";
-import { wpPublishPost, WpPublishError, type WpPublishInput } from "./wpPublish";
+import { wpPublishPost, WpPublishError, type WpPublishInput, type YoastMeta, type RelatedLink, type FaqItem } from "./wpPublish";
 import {
   setupMiddlewareChain,
   securityHeadersMiddleware,
@@ -76,6 +76,16 @@ const DAILY_TOKEN_LIMIT = 30_000;
 const WP_MAX_TITLE_LENGTH = 1_000;
 /** Maximum allowed length for a WordPress post HTML content body. */
 const WP_MAX_CONTENT_LENGTH = 200_000;
+/** Maximum number of related links per post. */
+const WP_MAX_RELATED_LINKS = 20;
+/** Maximum number of FAQ items per post. */
+const WP_MAX_FAQ_ITEMS = 30;
+/** Maximum length for a Yoast SEO title. */
+const WP_MAX_YOAST_TITLE_LENGTH = 300;
+/** Maximum length for a Yoast SEO meta description. */
+const WP_MAX_YOAST_DESC_LENGTH = 320;
+/** Maximum length for a Yoast SEO focus keyphrase. */
+const WP_MAX_YOAST_FOCUSKW_LENGTH = 200;
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(sanitizeOutput(data)), {
@@ -741,12 +751,86 @@ export default {
           return securityHeadersMiddleware(jsonResponse({ error: "Field status must be one of: draft, publish, pending, private" }, 400));
         }
 
+        // Validate yoast (optional)
+        let yoast: YoastMeta | undefined;
+        if (body.yoast !== undefined) {
+          if (typeof body.yoast !== "object" || Array.isArray(body.yoast) || body.yoast === null) {
+            return securityHeadersMiddleware(jsonResponse({ error: "Field yoast must be an object" }, 400));
+          }
+          const y = body.yoast as Record<string, unknown>;
+          if (y.title !== undefined) {
+            if (typeof y.title !== "string") return securityHeadersMiddleware(jsonResponse({ error: "Field yoast.title must be a string" }, 400));
+            if ((y.title as string).length > WP_MAX_YOAST_TITLE_LENGTH) return securityHeadersMiddleware(jsonResponse({ error: `Field yoast.title exceeds maximum length of ${WP_MAX_YOAST_TITLE_LENGTH} characters` }, 400));
+          }
+          if (y.description !== undefined) {
+            if (typeof y.description !== "string") return securityHeadersMiddleware(jsonResponse({ error: "Field yoast.description must be a string" }, 400));
+            if ((y.description as string).length > WP_MAX_YOAST_DESC_LENGTH) return securityHeadersMiddleware(jsonResponse({ error: `Field yoast.description exceeds maximum length of ${WP_MAX_YOAST_DESC_LENGTH} characters` }, 400));
+          }
+          if (y.focuskw !== undefined) {
+            if (typeof y.focuskw !== "string") return securityHeadersMiddleware(jsonResponse({ error: "Field yoast.focuskw must be a string" }, 400));
+            if ((y.focuskw as string).length > WP_MAX_YOAST_FOCUSKW_LENGTH) return securityHeadersMiddleware(jsonResponse({ error: `Field yoast.focuskw exceeds maximum length of ${WP_MAX_YOAST_FOCUSKW_LENGTH} characters` }, 400));
+          }
+          yoast = body.yoast;
+        }
+
+        // Validate relatedLinks (optional)
+        let relatedLinks: RelatedLink[] | undefined;
+        if (body.relatedLinks !== undefined) {
+          if (!Array.isArray(body.relatedLinks)) {
+            return securityHeadersMiddleware(jsonResponse({ error: "Field relatedLinks must be an array" }, 400));
+          }
+          if (body.relatedLinks.length > WP_MAX_RELATED_LINKS) {
+            return securityHeadersMiddleware(jsonResponse({ error: `Field relatedLinks exceeds maximum of ${WP_MAX_RELATED_LINKS} items` }, 400));
+          }
+          for (let i = 0; i < body.relatedLinks.length; i++) {
+            const link = body.relatedLinks[i] as unknown as Record<string, unknown>;
+            if (typeof link?.title !== "string" || (link.title as string).trim().length === 0) {
+              return securityHeadersMiddleware(jsonResponse({ error: `relatedLinks[${i}].title must be a non-empty string` }, 400));
+            }
+            if (typeof link?.url !== "string" || (link.url as string).trim().length === 0) {
+              return securityHeadersMiddleware(jsonResponse({ error: `relatedLinks[${i}].url must be a non-empty string` }, 400));
+            }
+            try { new URL(link.url as string); } catch {
+              return securityHeadersMiddleware(jsonResponse({ error: `relatedLinks[${i}].url is not a valid URL` }, 400));
+            }
+          }
+          relatedLinks = body.relatedLinks as RelatedLink[];
+        }
+
+        // Validate faq (optional)
+        let faq: FaqItem[] | undefined;
+        if (body.faq !== undefined) {
+          if (!Array.isArray(body.faq)) {
+            return securityHeadersMiddleware(jsonResponse({ error: "Field faq must be an array" }, 400));
+          }
+          if (body.faq.length > WP_MAX_FAQ_ITEMS) {
+            return securityHeadersMiddleware(jsonResponse({ error: `Field faq exceeds maximum of ${WP_MAX_FAQ_ITEMS} items` }, 400));
+          }
+          for (let i = 0; i < body.faq.length; i++) {
+            const item = body.faq[i] as unknown as Record<string, unknown>;
+            if (typeof item?.question !== "string" || (item.question as string).trim().length === 0) {
+              return securityHeadersMiddleware(jsonResponse({ error: `faq[${i}].question must be a non-empty string` }, 400));
+            }
+            if (item.answerHtml !== undefined && typeof item.answerHtml !== "string") {
+              return securityHeadersMiddleware(jsonResponse({ error: `faq[${i}].answerHtml must be a string` }, 400));
+            }
+            if (item.answerText !== undefined && typeof item.answerText !== "string") {
+              return securityHeadersMiddleware(jsonResponse({ error: `faq[${i}].answerText must be a string` }, 400));
+            }
+          }
+          faq = body.faq as FaqItem[];
+        }
+
         const input: WpPublishInput = {
           title: body.title.trim(),
           contentHtml: body.contentHtml,
           status: body.status ?? "draft",
           categories: Array.isArray(body.categories) ? body.categories : [],
           tags: Array.isArray(body.tags) ? body.tags : [],
+          yoast,
+          relatedLinks,
+          faq,
+          includeApplyNowButton: typeof body.includeApplyNowButton === "boolean" ? body.includeApplyNowButton : true,
         };
 
         const result = await wpPublishPost(env.WP_SITE_URL, env.WP_USER, env.WP_APP_PASSWORD, input);
@@ -768,7 +852,7 @@ export default {
           "/workflow/blog/draft (POST)": "Run the draft pipeline (Python prompt) via Google Gemini",
           "/workflow/execute (POST)": "Run the full workflow end-to-end (research → outline → draft) in a single call",
           "/workflow/:id (GET)": "Retrieve workflow state, phase outputs, logs, and errors",
-          "/wp/publish (POST)": "Publish or draft a post to the configured WordPress site",
+          "/wp/publish (POST)": "Publish or draft a post to WordPress with optional Yoast SEO meta, Apply Now button, Related Links, and FAQ sections",
           "/admin/logs?date= (GET)": "Retrieve observability event logs for a given date (default: today)",
           "/admin/alerts (GET)": "Retrieve all stored alerts",
           "/admin/abuse?ip= (GET)": "Retrieve abuse record for a specific IP address",

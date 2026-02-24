@@ -102,6 +102,13 @@ The application is built using a microservices architecture that allows independ
 #### `POST /wp/publish`
 Creates a post (draft or published) on the configured WordPress site via the REST API. Requires `WP_SITE_URL`, `WP_USER`, and `WP_APP_PASSWORD` secrets.
 
+The Worker composes the final HTML body before sending it to WordPress:
+1. Prepends an `<h1>` using `title` if the content lacks one.
+2. Appends an **Apply Now** CTA button (unless `includeApplyNowButton` is `false`).
+3. Appends a **Related Links** section when `relatedLinks` is provided.
+4. Appends an **FAQ** section when `faq` is provided (semantic HTML fallback — see note below).
+
+**Minimal example:**
 ```bash
 curl -X POST "https://<worker-url>/wp/publish" \
   -H "Content-Type: application/json" \
@@ -115,8 +122,56 @@ curl -X POST "https://<worker-url>/wp/publish" \
   }'
 ```
 
+**Full example (all optional fields):**
+```bash
+curl -X POST "https://<worker-url>/wp/publish" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <API_KEY>" \
+  -d '{
+    "title": "Personal Loans Guide",
+    "contentHtml": "<p>Everything you need to know about personal loans.</p>",
+    "status": "publish",
+    "categories": ["Finance"],
+    "tags": ["loans", "personal finance"],
+    "yoast": {
+      "title": "Personal Loans Guide – BitX Capital",
+      "description": "Learn about personal loan options, rates, and how to apply with BitX Capital.",
+      "focuskw": "personal loans"
+    },
+    "relatedLinks": [
+      { "title": "Home Loans", "url": "https://bitxcapital.com/home-loans/" },
+      { "title": "Business Loans", "url": "https://bitxcapital.com/business-loans/" }
+    ],
+    "faq": [
+      {
+        "question": "What is the minimum credit score required?",
+        "answerText": "We consider applicants with a variety of credit profiles."
+      },
+      {
+        "question": "How quickly can I get funds?",
+        "answerHtml": "<p>Funds are typically disbursed within <strong>24–48 hours</strong> of approval.</p>"
+      }
+    ],
+    "includeApplyNowButton": true
+  }'
+```
+
 **Required fields:** `title`, `contentHtml`  
-**Optional fields:** `status` (`draft` | `publish` | `pending` | `private`, default `draft`), `categories` (array of names), `tags` (array of names)
+**Optional fields:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `status` | `"draft" \| "publish" \| "pending" \| "private"` | `"draft"` | WordPress post status |
+| `categories` | `string[]` | `[]` | Category names (created if not found) |
+| `tags` | `string[]` | `[]` | Tag names (created if not found) |
+| `yoast.title` | `string` | — | Yoast SEO title (`_yoast_wpseo_title`) — max 300 chars |
+| `yoast.description` | `string` | — | Yoast meta description (`_yoast_wpseo_metadesc`) — max 320 chars |
+| `yoast.focuskw` | `string` | — | Yoast focus keyphrase (`_yoast_wpseo_focuskw`) — max 200 chars |
+| `relatedLinks` | `Array<{title, url}>` | — | Related links appended at the bottom (max 20) |
+| `faq` | `Array<{question, answerHtml?, answerText?}>` | — | FAQ items appended at the bottom (max 30) |
+| `includeApplyNowButton` | `boolean` | `true` | Append an "Apply Now" button to `https://bitxcapital.com/application-journey/` |
+
+> **Note on Yoast FAQ structured schema:** Yoast's rich-results FAQ schema requires the Gutenberg block editor and the Yoast SEO FAQ block. The Worker renders FAQ content as semantic HTML (`<section class="faq">`), which serves as a visual fallback. To enable Yoast FAQ rich results, replace the HTML in the WP editor with Gutenberg-serialised FAQ blocks after importing the post.
 
 **Response (201 Created):**
 ```json
@@ -132,7 +187,7 @@ curl -X POST "https://<worker-url>/wp/publish" \
 Category and tag names that do not yet exist in WordPress are created automatically. Existing terms are resolved by name (case-insensitive) or slug.
 
 **Error responses:**
-- `400 Bad Request` — missing or invalid fields (e.g. `title`, `contentHtml`, bad `status` value)
+- `400 Bad Request` — missing or invalid fields (e.g. `title`, `contentHtml`, bad `status` value, invalid URL in `relatedLinks`, array limit exceeded)
 - `503 Service Unavailable` — `WP_SITE_URL`, `WP_USER`, or `WP_APP_PASSWORD` not configured
 - `4xx/502` — WordPress returned an error (propagated with `wpStatus` and `error` fields)
 

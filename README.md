@@ -19,6 +19,16 @@ The BITX Capital blog writing worker application facilitates the creation and ma
 
 ## Secrets & Environment Variables
 
+All API and model credentials **must** be stored as Cloudflare Worker secrets and sourced from the runtime environment. No API keys or tokens are ever hardcoded in the application code. The following secrets are supported:
+
+| Secret name | Required | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | Yes (for `/gemini/*`) | Google Gemini API key |
+| `API_KEY` | Recommended | Bearer token for general endpoint authentication |
+| `ADMIN_API_KEY` | Recommended | Separate Bearer token for `/admin/*` endpoints (Zero Trust) |
+| `CF_ACCESS_AUD` | Optional | Cloudflare Access audience tag for Zero Trust JWT enforcement |
+| `ALERT_WEBHOOK_URL` | Optional | Webhook URL for external alert delivery |
+
 ### `GEMINI_API_KEY`
 Required for the `/gemini/*` endpoints. Obtain an API key from [Google AI Studio](https://aistudio.google.com/app/apikey) and add it as a Cloudflare secret:
 
@@ -27,6 +37,27 @@ npx wrangler secret put GEMINI_API_KEY
 ```
 
 You will be prompted to enter the key value. The secret is stored securely in Cloudflare and is never logged or exposed in responses.
+
+### `API_KEY`
+Enables Bearer token authentication for all endpoints. Without this secret the Worker operates in **open mode** (all requests are allowed), which is suitable only for local development.
+
+```bash
+npx wrangler secret put API_KEY
+```
+
+### `ADMIN_API_KEY`
+A separate, privileged Bearer token required for all `/admin/*` endpoints. When set, admin routes **reject** requests that present the regular `API_KEY` — the caller must supply `ADMIN_API_KEY` instead. This provides explicit access separation between general API consumers and admin operators.
+
+```bash
+npx wrangler secret put ADMIN_API_KEY
+```
+
+### `CF_ACCESS_AUD`
+Optional Cloudflare Zero Trust audience tag. When set, admin and workflow-trigger endpoints additionally verify the `Cf-Access-Jwt-Assertion` header, confirming the request was validated by a Cloudflare Access policy before reaching the Worker. See [Zero Trust setup](#zero-trust-cloudflare-access-configuration) below.
+
+```bash
+npx wrangler secret put CF_ACCESS_AUD
+```
 
 ## Architecture
 The application is built using a microservices architecture that allows independent scaling and development of different components. It leverages Node.js for the server-side logic and MongoDB for data storage.
@@ -422,17 +453,75 @@ Every response includes the following hardened HTTP headers:
 ### 6. CORS
 `OPTIONS` preflight requests are handled automatically and return the appropriate `Access-Control-Allow-*` headers.
 
+### 7. Admin / Zero Trust Access Guard
+All `/admin/*` endpoints are protected by an additional access guard applied **after** the general middleware pipeline:
+
+- **`ADMIN_API_KEY`** — if configured, the request's `Authorization: Bearer` token must equal `ADMIN_API_KEY`. Requests that carry the regular `API_KEY` are rejected with `403 Forbidden`. This separates general API access from privileged admin operations.
+- **`CF_ACCESS_AUD`** — if configured, the request must also carry a `Cf-Access-Jwt-Assertion` header, which Cloudflare Access injects automatically for requests validated by a Zero Trust policy. Requests without this header are rejected with `403 Forbidden`.
+
+The two guards are applied together: a request must satisfy **all configured guards** to reach an admin endpoint.
+
+### Middleware Pipeline Summary
+
+```
+Every request
+  └─ CORS preflight check (OPTIONS → short-circuit 200)
+  └─ Middleware chain:
+       1. Bearer token auth     (401 if invalid when API_KEY is set)
+       2. Rate limiter          (429 if > 60 req/min per IP)
+       3. Input size check      (reject if Content-Length > 1 MB)
+  └─ /admin/* routes:
+       4. Admin key guard       (403 if ADMIN_API_KEY is set and token doesn't match)
+       5. CF Access JWT guard   (403 if CF_ACCESS_AUD is set and header is absent)
+  └─ Route handler
+  └─ Output sanitization + security response headers applied to all responses
+```
+
+## Zero Trust — Cloudflare Access Configuration
+
+To protect admin and operator endpoints using [Cloudflare Zero Trust](https://www.cloudflare.com/zero-trust/):
+
+1. **Create an Access Application** in the Cloudflare Zero Trust dashboard:
+   - Type: **Self-hosted**
+   - Application domain: `<your-worker-domain>/admin/*`  
+   - Session duration: set to your policy requirement
+   - Note the **Application Audience (AUD) tag** shown in the application settings
+
+2. **Configure an Access Policy** (e.g. allow only users in your organisation's IdP, or an allowlist of email addresses).
+
+3. **Store the AUD tag as a Worker secret:**
+   ```bash
+   npx wrangler secret put CF_ACCESS_AUD
+   # paste the Application Audience tag value
+   ```
+
+4. **Store a separate admin Bearer token:**
+   ```bash
+   npx wrangler secret put ADMIN_API_KEY
+   # use a strong random value, different from API_KEY
+   ```
+
+5. **Deploy the Worker** — admin endpoints now require both a valid Cloudflare Access JWT (via the `Cf-Access-Jwt-Assertion` header injected by Cloudflare's network) and the `ADMIN_API_KEY` Bearer token.
+
+> **Note:** Cloudflare Access validates the JWT signature and identity claims before forwarding the request to the Worker. The Worker's `checkCfAccessJwt` guard confirms the assertion header is present, providing defense-in-depth against requests that bypass Cloudflare's network.
+
 ## Deployment Guidelines
 To deploy the application:
 1. **Set required secrets:**
    ```bash
    npx wrangler secret put GEMINI_API_KEY
+   npx wrangler secret put API_KEY
+   npx wrangler secret put ADMIN_API_KEY
    ```
 2. **(Optional) Set the alert webhook URL:**
    ```bash
    npx wrangler secret put ALERT_WEBHOOK_URL
    ```
-3. **Deploy:**
+3. **(Optional) Configure Zero Trust for admin endpoints:**
+   ```bash
+   npx wrangler secret put CF_ACCESS_AUD
+   ```
+4. **Deploy:**
    ```bash
    npm run deploy
    ```

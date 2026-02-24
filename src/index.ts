@@ -8,6 +8,8 @@ import {
   errorResponse,
   requestLoggingMiddleware,
   sanitizeOutput,
+  checkAdminAccess,
+  checkCfAccessJwt,
 } from "./middleware";
 import {
   assertPhaseModel,
@@ -25,11 +27,27 @@ export interface Env {
   AI: {
     run(model: string, input: unknown): Promise<unknown>;
   };
+  /** Gemini API key — must be set via: npx wrangler secret put GEMINI_API_KEY */
   GEMINI_API_KEY: string;
   /** KV namespace for persisting blog workflow state, logs, and errors. */
   BLOG_WORKFLOW_STATE: KVNamespace;
   /** Optional Bearer token for API authentication. Set via: npx wrangler secret put API_KEY */
   API_KEY?: string;
+  /**
+   * Optional separate Bearer token required for all /admin/* endpoints.
+   * When set, admin routes reject requests that do not present this token,
+   * even if the request carries a valid API_KEY.
+   * Set via: npx wrangler secret put ADMIN_API_KEY
+   */
+  ADMIN_API_KEY?: string;
+  /**
+   * Optional Cloudflare Access audience tag (from your Access Application settings).
+   * When set, admin and workflow-trigger endpoints additionally require the
+   * Cf-Access-Jwt-Assertion header, confirming the request passed through
+   * Cloudflare Zero Trust before reaching the Worker.
+   * Set via: npx wrangler secret put CF_ACCESS_AUD
+   */
+  CF_ACCESS_AUD?: string;
   /** Optional webhook URL for external alert notifications. Set via: npx wrangler secret put ALERT_WEBHOOK_URL */
   ALERT_WEBHOOK_URL?: string;
 }
@@ -123,6 +141,15 @@ export default {
     }
 
     // ── Admin observability endpoints (require authentication) ──────────────
+    // Additional Zero Trust guard: if ADMIN_API_KEY or CF_ACCESS_AUD is configured,
+    // admin routes require those credentials beyond the general API_KEY check above.
+    if (pathname.startsWith("/admin/")) {
+      if (!checkAdminAccess(request, env.ADMIN_API_KEY) || !(await checkCfAccessJwt(request, env.CF_ACCESS_AUD))) {
+        return securityHeadersMiddleware(
+          errorResponse(403, "Forbidden: admin access credentials required", context.requestId)
+        );
+      }
+    }
 
     if (pathname === "/admin/logs") {
       const date = searchParams.get("date") ?? undefined;

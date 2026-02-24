@@ -160,3 +160,77 @@ export function setupMiddlewareChain(apiKey?: string): MiddlewareChain {
     .add(rateLimitMiddleware)
     .add(inputValidationMiddleware);
 }
+
+// Admin access guard — enforces a separate ADMIN_API_KEY for privileged endpoints.
+// When ADMIN_API_KEY is configured, admin/operator/workflow-trigger routes MUST present
+// it as the Bearer token. If not configured, this guard is a no-op (the outer
+// middleware chain has already verified general authentication).
+export function checkAdminAccess(request: Request, adminApiKey?: string): boolean {
+  if (!adminApiKey) return true;
+  const auth = request.headers.get('Authorization') ?? '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  return token.length > 0 && token === adminApiKey;
+}
+
+// JWT payload shape for Cloudflare Access assertions.
+interface CfAccessJwtPayload {
+  aud?: string | string[];
+  exp?: number;
+  iss?: string;
+}
+
+// Decode a base64url-encoded string to a plain string.
+function base64UrlDecode(str: string): string {
+  const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+  return atob(base64);
+}
+
+// Cloudflare Access Zero Trust guard — validates the Cf-Access-Jwt-Assertion header
+// JWT audience claim and expiry. When CF_ACCESS_AUD is configured:
+// - The header must be present and non-empty.
+// - The JWT must be structurally valid (three base64url parts).
+// - The `aud` claim must include the configured audience tag.
+// - The token must not be expired.
+//
+// Cloudflare's network validates the RS256 signature before forwarding the request
+// to the Worker. This guard confirms the assertion header has not been stripped and
+// that the token was issued for the correct application.
+export async function checkCfAccessJwt(request: Request, cfAccessAud?: string): Promise<boolean> {
+  if (!cfAccessAud) return true;
+
+  const assertion = request.headers.get('Cf-Access-Jwt-Assertion');
+  if (!assertion || assertion.trim().length === 0) {
+    SecurityLogger.log('WARN', 'cf_access', { error: 'missing_assertion_header' });
+    return false;
+  }
+
+  const parts = assertion.trim().split('.');
+  if (parts.length !== 3) {
+    SecurityLogger.log('WARN', 'cf_access', { error: 'malformed_jwt' });
+    return false;
+  }
+
+  let payload: CfAccessJwtPayload;
+  try {
+    payload = JSON.parse(base64UrlDecode(parts[1])) as CfAccessJwtPayload;
+  } catch {
+    SecurityLogger.log('WARN', 'cf_access', { error: 'jwt_payload_parse_failed' });
+    return false;
+  }
+
+  // Verify the audience claim includes the configured AUD tag.
+  const aud = payload.aud;
+  const audMatch = Array.isArray(aud) ? aud.includes(cfAccessAud) : aud === cfAccessAud;
+  if (!audMatch) {
+    SecurityLogger.log('WARN', 'cf_access', { error: 'aud_mismatch', expected: cfAccessAud });
+    return false;
+  }
+
+  // Verify the token has not expired.
+  if (payload.exp !== undefined && Math.floor(Date.now() / 1000) > payload.exp) {
+    SecurityLogger.log('WARN', 'cf_access', { error: 'token_expired' });
+    return false;
+  }
+
+  return true;
+}

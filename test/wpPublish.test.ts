@@ -4,6 +4,9 @@ import {
   wpPublishPost,
   WpPublishError,
   resolveTermIds,
+  buildContentHtml,
+  escapeHtml,
+  APPLY_NOW_URL,
 } from "../src/wpPublish";
 
 // ---------------------------------------------------------------------------
@@ -246,6 +249,230 @@ describe("wpPublishPost", () => {
       });
       const body = JSON.parse(capturedBodies[0]);
       expect(body.status).toBe("draft");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// escapeHtml
+// ---------------------------------------------------------------------------
+describe("escapeHtml", () => {
+  it("escapes HTML special characters", () => {
+    expect(escapeHtml("Hello <World> & \"Friends\" '")).toBe(
+      "Hello &lt;World&gt; &amp; &quot;Friends&quot; &#39;"
+    );
+  });
+
+  it("returns the same string when no special characters are present", () => {
+    expect(escapeHtml("plain text")).toBe("plain text");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildContentHtml
+// ---------------------------------------------------------------------------
+describe("buildContentHtml", () => {
+  it("prepends an H1 when content lacks one", () => {
+    const html = buildContentHtml({ title: "My Title", contentHtml: "<p>Body</p>" });
+    expect(html).toContain("<h1>My Title</h1>");
+    expect(html.indexOf("<h1>")).toBeLessThan(html.indexOf("<p>Body</p>"));
+  });
+
+  it("does not prepend an H1 when content already has one", () => {
+    const html = buildContentHtml({
+      title: "My Title",
+      contentHtml: "<h1>Existing H1</h1><p>Body</p>",
+    });
+    expect(html.match(/<h1/gi)?.length).toBe(1);
+    expect(html).toContain("<h1>Existing H1</h1>");
+  });
+
+  it("appends Apply Now button by default", () => {
+    const html = buildContentHtml({ title: "T", contentHtml: "<p>x</p>" });
+    expect(html).toContain(`href="${APPLY_NOW_URL}"`);
+    expect(html).toContain("Apply Now");
+  });
+
+  it("omits Apply Now button when includeApplyNowButton is false", () => {
+    const html = buildContentHtml({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      includeApplyNowButton: false,
+    });
+    expect(html).not.toContain("Apply Now");
+  });
+
+  it("appends a Related Links section when relatedLinks provided", () => {
+    const html = buildContentHtml({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      relatedLinks: [
+        { title: "Link One", url: "https://example.com/one" },
+        { title: "Link Two", url: "https://example.com/two" },
+      ],
+    });
+    expect(html).toContain("Related Links");
+    expect(html).toContain("https://example.com/one");
+    expect(html).toContain("Link One");
+    expect(html).toContain("https://example.com/two");
+    expect(html).toContain("Link Two");
+  });
+
+  it("does not append a Related Links section when relatedLinks is empty", () => {
+    const html = buildContentHtml({ title: "T", contentHtml: "<p>x</p>", relatedLinks: [] });
+    expect(html).not.toContain("Related Links");
+  });
+
+  it("appends an FAQ section with answerHtml", () => {
+    const html = buildContentHtml({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      faq: [{ question: "What is X?", answerHtml: "<p>X is great</p>" }],
+    });
+    expect(html).toContain("Frequently Asked Questions");
+    expect(html).toContain("What is X?");
+    expect(html).toContain("<p>X is great</p>");
+  });
+
+  it("appends an FAQ section with answerText (escaped)", () => {
+    const html = buildContentHtml({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      faq: [{ question: "Who are you?", answerText: "I am <you>" }],
+    });
+    expect(html).toContain("Who are you?");
+    expect(html).toContain("I am &lt;you&gt;");
+  });
+
+  it("appends an FAQ section with no answer when both answerHtml and answerText are absent", () => {
+    const html = buildContentHtml({
+      title: "T",
+      contentHtml: "<p>x</p>",
+      faq: [{ question: "Empty?" }],
+    });
+    expect(html).toContain("Empty?");
+    expect(html).toContain("faq-item");
+  });
+
+  it("escapes HTML in title when prepending H1", () => {
+    const html = buildContentHtml({ title: "Loans & <Mortgages>", contentHtml: "<p>x</p>" });
+    expect(html).toContain("<h1>Loans &amp; &lt;Mortgages&gt;</h1>");
+  });
+
+  it("sections appear in correct order: H1, content, Apply Now, Related Links, FAQ", () => {
+    const html = buildContentHtml({
+      title: "T",
+      contentHtml: "<p>body</p>",
+      relatedLinks: [{ title: "L", url: "https://example.com" }],
+      faq: [{ question: "Q?", answerText: "A" }],
+    });
+    const h1Pos = html.indexOf("<h1>");
+    const bodyPos = html.indexOf("<p>body</p>");
+    const applyPos = html.indexOf("Apply Now");
+    const relatedPos = html.indexOf("Related Links");
+    const faqPos = html.indexOf("Frequently Asked Questions");
+    expect(h1Pos).toBeLessThan(bodyPos);
+    expect(bodyPos).toBeLessThan(applyPos);
+    expect(applyPos).toBeLessThan(relatedPos);
+    expect(relatedPos).toBeLessThan(faqPos);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wpPublishPost — Yoast meta
+// ---------------------------------------------------------------------------
+describe("wpPublishPost with Yoast meta", () => {
+  it("sends Yoast meta keys in the WP payload when yoast is provided", async () => {
+    const originalFetch = globalThis.fetch;
+    const capturedBodies: string[] = [];
+
+    globalThis.fetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/wp-json/wp/v2/posts") && !urlStr.includes("categories") && !urlStr.includes("tags")) {
+        capturedBodies.push(init?.body as string);
+        return new Response(
+          JSON.stringify({ id: 5005, link: "https://example.com/?p=5005", status: "draft" }),
+          { status: 201 }
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    };
+
+    try {
+      await wpPublishPost("https://example.com", "u", "p", {
+        title: "SEO Post",
+        contentHtml: "<p>Content</p>",
+        yoast: {
+          title: "SEO Title",
+          description: "SEO Description",
+          focuskw: "loans",
+        },
+      });
+      const body = JSON.parse(capturedBodies[0]);
+      expect(body.meta._yoast_wpseo_title).toBe("SEO Title");
+      expect(body.meta._yoast_wpseo_metadesc).toBe("SEO Description");
+      expect(body.meta._yoast_wpseo_focuskw).toBe("loans");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not include meta when yoast is not provided", async () => {
+    const originalFetch = globalThis.fetch;
+    const capturedBodies: string[] = [];
+
+    globalThis.fetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/wp-json/wp/v2/posts")) {
+        capturedBodies.push(init?.body as string);
+        return new Response(
+          JSON.stringify({ id: 6006, link: "https://example.com/?p=6006", status: "draft" }),
+          { status: 201 }
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    };
+
+    try {
+      await wpPublishPost("https://example.com", "u", "p", {
+        title: "No Yoast",
+        contentHtml: "<p>Content</p>",
+      });
+      const body = JSON.parse(capturedBodies[0]);
+      expect(body.meta).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("sends only provided Yoast sub-fields (partial yoast object)", async () => {
+    const originalFetch = globalThis.fetch;
+    const capturedBodies: string[] = [];
+
+    globalThis.fetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/wp-json/wp/v2/posts")) {
+        capturedBodies.push(init?.body as string);
+        return new Response(
+          JSON.stringify({ id: 7007, link: "https://example.com/?p=7007", status: "draft" }),
+          { status: 201 }
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    };
+
+    try {
+      await wpPublishPost("https://example.com", "u", "p", {
+        title: "Partial Yoast",
+        contentHtml: "<p>x</p>",
+        yoast: { title: "Only Title" },
+      });
+      const body = JSON.parse(capturedBodies[0]);
+      expect(body.meta._yoast_wpseo_title).toBe("Only Title");
+      expect(body.meta._yoast_wpseo_metadesc).toBeUndefined();
+      expect(body.meta._yoast_wpseo_focuskw).toBeUndefined();
     } finally {
       globalThis.fetch = originalFetch;
     }

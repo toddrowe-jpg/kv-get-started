@@ -5,6 +5,29 @@
  * to create posts and resolve category/tag names to IDs.
  */
 
+/** Yoast SEO meta fields (requires the bitx-yoast-rest plugin). */
+export interface YoastMeta {
+  /** Yoast SEO title (_yoast_wpseo_title) */
+  title?: string;
+  /** Yoast SEO meta description (_yoast_wpseo_metadesc) */
+  description?: string;
+  /** Yoast SEO focus keyphrase (_yoast_wpseo_focuskw) */
+  focuskw?: string;
+}
+
+/** A single related-link item appended to the post footer. */
+export interface RelatedLink {
+  title: string;
+  url: string;
+}
+
+/** A single FAQ item.  Provide answerHtml for rich markup or answerText for plain text. */
+export interface FaqItem {
+  question: string;
+  answerHtml?: string;
+  answerText?: string;
+}
+
 export interface WpPublishInput {
   title: string;
   /** HTML content for the post body */
@@ -15,6 +38,17 @@ export interface WpPublishInput {
   categories?: string[];
   /** Array of tag names to assign */
   tags?: string[];
+  /** Yoast SEO meta fields (optional) */
+  yoast?: YoastMeta;
+  /** Related links appended at the bottom of the post (max 20) */
+  relatedLinks?: RelatedLink[];
+  /** FAQ items appended at the bottom of the post (max 30) */
+  faq?: FaqItem[];
+  /**
+   * Whether to append an "Apply Now" CTA button linking to
+   * https://bitxcapital.com/application-journey/ (default: true).
+   */
+  includeApplyNowButton?: boolean;
 }
 
 export interface WpPublishResult {
@@ -23,6 +57,81 @@ export interface WpPublishResult {
   status: string;
   categoryIds: number[];
   tagIds: number[];
+}
+
+/** URL that the "Apply Now" button always links to. */
+export const APPLY_NOW_URL = "https://bitxcapital.com/application-journey/";
+
+/** Escape text so it is safe to embed inside HTML element content. */
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Compose the final HTML body from the input fields.
+ *
+ * Order of appended sections:
+ *   1. Optional leading H1 (prepended when the content has no <h1>)
+ *   2. Caller-supplied contentHtml
+ *   3. "Apply Now" CTA button (unless includeApplyNowButton === false)
+ *   4. Related Links section (when relatedLinks provided)
+ *   5. FAQ section (when faq provided)
+ *
+ * NOTE on Yoast FAQ schema: Yoast's structured FAQ schema (HowTo/FAQ block)
+ * requires the Gutenberg block editor and the Yoast SEO FAQ block. This
+ * implementation renders FAQ content as semantic HTML which works as a visual
+ * fallback.  To enable Yoast FAQ rich results, replace the HTML below with
+ * Gutenberg-serialised FAQ blocks or use the Yoast SEO FAQ block in the WP
+ * editor after importing the post.
+ */
+export function buildContentHtml(input: WpPublishInput): string {
+  let html = input.contentHtml;
+
+  // Ensure a single H1: prepend one using the post title when none exists
+  if (!/<h1[\s>]/i.test(html)) {
+    html = `<h1>${escapeHtml(input.title)}</h1>\n${html}`;
+  }
+
+  // "Apply Now" CTA button
+  if (input.includeApplyNowButton !== false) {
+    html +=
+      `\n<p><a class="apply-now-button" href="${APPLY_NOW_URL}">Apply Now</a></p>`;
+  }
+
+  // Related Links section
+  if (input.relatedLinks && input.relatedLinks.length > 0) {
+    const items = input.relatedLinks
+      .map(
+        (l) =>
+          `<li><a href="${escapeHtml(l.url)}">${escapeHtml(l.title)}</a></li>`,
+      )
+      .join("\n");
+    html +=
+      `\n<section class="related-links"><h2>Related Links</h2><ul>\n${items}\n</ul></section>`;
+  }
+
+  // FAQ section
+  if (input.faq && input.faq.length > 0) {
+    const items = input.faq
+      .map((f) => {
+        const answer = f.answerHtml
+          ? f.answerHtml
+          : f.answerText
+            ? `<p>${escapeHtml(f.answerText)}</p>`
+            : "";
+        return `<div class="faq-item"><h3>${escapeHtml(f.question)}</h3>${answer}</div>`;
+      })
+      .join("\n");
+    html +=
+      `\n<!-- Yoast FAQ structured schema requires Gutenberg FAQ blocks; this HTML provides a semantic fallback. -->\n<section class="faq"><h2>Frequently Asked Questions</h2>\n${items}\n</section>`;
+  }
+
+  return html;
 }
 
 export class WpPublishError extends Error {
@@ -156,14 +265,31 @@ export async function wpPublishPost(
     authHeader,
   );
 
+  // Build final HTML content (H1 injection, Apply Now button, Related Links, FAQ)
+  const finalContent = buildContentHtml(input);
+
   // Create the post
   const postPayload: Record<string, unknown> = {
     title: input.title,
-    content: input.contentHtml,
+    content: finalContent,
     status,
   };
   if (categoryIds.length > 0) postPayload.categories = categoryIds;
   if (tagIds.length > 0) postPayload.tags = tagIds;
+
+  // Yoast SEO meta (requires the bitx-yoast-rest plugin on the WP site)
+  if (input.yoast) {
+    const meta: Record<string, string> = {};
+    const yoastFieldMap: Array<[keyof YoastMeta, string]> = [
+      ["title", "_yoast_wpseo_title"],
+      ["description", "_yoast_wpseo_metadesc"],
+      ["focuskw", "_yoast_wpseo_focuskw"],
+    ];
+    for (const [field, key] of yoastFieldMap) {
+      if (input.yoast[field] !== undefined) meta[key] = input.yoast[field] as string;
+    }
+    if (Object.keys(meta).length > 0) postPayload.meta = meta;
+  }
 
   const postResp = await fetch(`${siteUrl}/wp-json/wp/v2/posts`, {
     method: "POST",

@@ -5,6 +5,12 @@ declare namespace Cloudflare {
 		USER_NOTIFICATION: KVNamespace;
 		/** KV namespace for persisting blog workflow state, logs, and errors. */
 		BLOG_WORKFLOW_STATE: KVNamespace;
+		/** WordPress site base URL (no trailing slash). Set via: npx wrangler secret put WP_SITE_URL */
+		WP_SITE_URL?: string;
+		/** WordPress username that owns the Application Password. Set via: npx wrangler secret put WP_USER */
+		WP_USER?: string;
+		/** WordPress Application Password (spaces stripped automatically). Set via: npx wrangler secret put WP_APP_PASSWORD */
+		WP_APP_PASSWORD?: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

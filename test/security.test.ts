@@ -14,6 +14,8 @@ import {
   securityHeadersMiddleware,
   sanitizeOutput,
   setupMiddlewareChain,
+  checkAdminAccess,
+  checkCfAccessJwt,
 } from "../src/middleware";
 
 // ---------------------------------------------------------------------------
@@ -304,5 +306,106 @@ describe("setupMiddlewareChain", () => {
     const { allowed, context } = await chain.execute(req);
     expect(allowed).toBe(true);
     expect(context.authenticated).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkAdminAccess
+// ---------------------------------------------------------------------------
+describe("checkAdminAccess", () => {
+  it("returns true when no admin key is configured (no-op)", () => {
+    const req = new Request("https://example.com/admin/logs");
+    expect(checkAdminAccess(req, undefined)).toBe(true);
+  });
+
+  it("returns false when admin key is configured and no Authorization header is present", () => {
+    const req = new Request("https://example.com/admin/logs");
+    expect(checkAdminAccess(req, "admin-secret")).toBe(false);
+  });
+
+  it("returns false when the Bearer token does not match the admin key", () => {
+    const req = new Request("https://example.com/admin/logs", {
+      headers: { Authorization: "Bearer wrong-key" },
+    });
+    expect(checkAdminAccess(req, "admin-secret")).toBe(false);
+  });
+
+  it("returns false when the regular API_KEY is presented instead of ADMIN_API_KEY", () => {
+    const req = new Request("https://example.com/admin/logs", {
+      headers: { Authorization: "Bearer regular-api-key" },
+    });
+    expect(checkAdminAccess(req, "admin-secret")).toBe(false);
+  });
+
+  it("returns true when the correct admin Bearer token is presented", () => {
+    const req = new Request("https://example.com/admin/logs", {
+      headers: { Authorization: "Bearer admin-secret" },
+    });
+    expect(checkAdminAccess(req, "admin-secret")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkCfAccessJwt
+// ---------------------------------------------------------------------------
+describe("checkCfAccessJwt", () => {
+  it("returns true when no CF_ACCESS_AUD is configured (no-op)", async () => {
+    const req = new Request("https://example.com/admin/logs");
+    expect(await checkCfAccessJwt(req, undefined)).toBe(true);
+  });
+
+  it("returns false when CF_ACCESS_AUD is configured and the assertion header is absent", async () => {
+    const req = new Request("https://example.com/admin/logs");
+    expect(await checkCfAccessJwt(req, "my-aud-tag")).toBe(false);
+  });
+
+  it("returns false when the assertion header is present but empty", async () => {
+    const req = new Request("https://example.com/admin/logs", {
+      headers: { "Cf-Access-Jwt-Assertion": "   " },
+    });
+    expect(await checkCfAccessJwt(req, "my-aud-tag")).toBe(false);
+  });
+
+  it("returns false when the JWT payload has a mismatched audience claim", async () => {
+    // JWT with aud: "other-aud"
+    const jwt = "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2lkIn0.eyJhdWQiOiJvdGhlci1hdWQiLCJleHAiOjE3NzE4OTUxMzB9.ZmFrZS1zaWc";
+    const req = new Request("https://example.com/admin/logs", {
+      headers: { "Cf-Access-Jwt-Assertion": jwt },
+    });
+    expect(await checkCfAccessJwt(req, "my-aud-tag")).toBe(false);
+  });
+
+  it("returns false when the JWT token is expired", async () => {
+    // JWT with exp: 1000000000 (year 2001, long expired)
+    const jwt = "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2lkIn0.eyJhdWQiOiJteS1hdWQtdGFnIiwiZXhwIjoxMDAwMDAwMDAwfQ.ZmFrZS1zaWc";
+    const req = new Request("https://example.com/admin/logs", {
+      headers: { "Cf-Access-Jwt-Assertion": jwt },
+    });
+    expect(await checkCfAccessJwt(req, "my-aud-tag")).toBe(false);
+  });
+
+  it("returns false when the JWT is malformed (not three parts)", async () => {
+    const req = new Request("https://example.com/admin/logs", {
+      headers: { "Cf-Access-Jwt-Assertion": "not.a.valid.jwt.at.all" },
+    });
+    expect(await checkCfAccessJwt(req, "my-aud-tag")).toBe(false);
+  });
+
+  it("returns true when the JWT has the correct audience claim (string)", async () => {
+    // JWT with aud: "my-aud-tag", exp: far future
+    const jwt = "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2lkIn0.eyJhdWQiOiJteS1hdWQtdGFnIiwiZXhwIjoxNzcxODk1MTMwLCJpc3MiOiJ0ZXN0In0.ZmFrZS1zaWc";
+    const req = new Request("https://example.com/admin/logs", {
+      headers: { "Cf-Access-Jwt-Assertion": jwt },
+    });
+    expect(await checkCfAccessJwt(req, "my-aud-tag")).toBe(true);
+  });
+
+  it("returns true when the JWT audience is an array that includes the configured AUD", async () => {
+    // JWT with aud: ["my-aud-tag", "other"], exp: far future
+    const jwt = "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2lkIn0.eyJhdWQiOlsibXktYXVkLXRhZyIsIm90aGVyIl0sImV4cCI6MTc3MTg5NTEzMH0.ZmFrZS1zaWc";
+    const req = new Request("https://example.com/admin/logs", {
+      headers: { "Cf-Access-Jwt-Assertion": jwt },
+    });
+    expect(await checkCfAccessJwt(req, "my-aud-tag")).toBe(true);
   });
 });

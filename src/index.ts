@@ -67,6 +67,31 @@ export interface Env {
    * Set via: npx wrangler secret put WP_APP_PASSWORD
    */
   WP_APP_PASSWORD?: string;
+  /**
+   * WhatsApp Cloud API verify token — must match the string set in Meta webhook config.
+   * Set via: npx wrangler secret put WHATSAPP_VERIFY_TOKEN
+   */
+  WHATSAPP_VERIFY_TOKEN?: string;
+  /**
+   * WhatsApp App Secret for payload signature verification.
+   * Set via: npx wrangler secret put WHATSAPP_APP_SECRET
+   */
+  WHATSAPP_APP_SECRET?: string;
+  /**
+   * WhatsApp Cloud API access token for sending messages.
+   * Set via: npx wrangler secret put WHATSAPP_ACCESS_TOKEN
+   */
+  WHATSAPP_ACCESS_TOKEN?: string;
+  /**
+   * WhatsApp Phone Number ID used as the sender.
+   * Set via: npx wrangler secret put WHATSAPP_PHONE_NUMBER_ID
+   */
+  WHATSAPP_PHONE_NUMBER_ID?: string;
+  /**
+   * Admin WhatsApp number for internal notifications.
+   * Set via: npx wrangler secret put WHATSAPP_ADMIN_NUMBER
+   */
+  WHATSAPP_ADMIN_NUMBER?: string;
 }
 
 /** Daily token limit used by the quota store (30 K tokens/day). */
@@ -104,6 +129,34 @@ export default {
     if (corsResponse) return corsResponse;
 
     const { pathname, searchParams } = new URL(request.url);
+
+    // ── WhatsApp Cloud API webhook (unauthenticated — Meta calls this directly) ──
+    if (pathname === "/whatsapp/webhook") {
+      if (request.method === "GET") {
+        const mode = searchParams.get("hub.mode");
+        const token = searchParams.get("hub.verify_token");
+        const challenge = searchParams.get("hub.challenge");
+        if (mode === "subscribe" && token && token === env.WHATSAPP_VERIFY_TOKEN) {
+          return new Response(challenge ?? "", {
+            status: 200,
+            headers: { "Content-Type": "text/plain" },
+          });
+        }
+        return new Response("Forbidden", { status: 403 });
+      }
+      if (request.method === "POST") {
+        let body: unknown = null;
+        try {
+          body = await request.json();
+        } catch {
+          // ignore parse errors — still acknowledge receipt to Meta
+        }
+        const obj = body as { object?: string; entry?: { id?: string }[] } | null;
+        const entryId = Array.isArray(obj?.entry) ? obj.entry[0]?.id : undefined;
+        console.log("[whatsapp] inbound webhook", JSON.stringify({ object: obj?.object, entryId }));
+        return new Response("OK", { status: 200 });
+      }
+    }
 
     // Observability store backed by the same KV namespace used for workflow state
     const obs = new ObservabilityStore(env.BLOG_WORKFLOW_STATE);

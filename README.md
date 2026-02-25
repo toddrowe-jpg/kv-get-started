@@ -86,7 +86,56 @@ npx wrangler secret put WP_APP_PASSWORD
 # paste the Application Password (spaces are fine)
 ```
 
-## Architecture
+## WhatsApp Cloud API Webhook
+
+This worker implements Meta's WhatsApp Cloud API webhook so that Meta can validate the Callback URL and deliver inbound messages.
+
+### Callback URL
+
+```
+https://marketing.bitxcapital.com/whatsapp/webhook
+```
+
+### Setting up the Verify Token
+
+1. Choose a random string (e.g. `openssl rand -hex 20`) and store it as a secret:
+
+   ```bash
+   npx wrangler secret put WHATSAPP_VERIFY_TOKEN
+   # paste the same string you will enter in the Meta App Dashboard
+   ```
+
+2. In the [Meta App Dashboard](https://developers.facebook.com/apps/) → **WhatsApp → Configuration**, set:
+   - **Callback URL**: `https://marketing.bitxcapital.com/whatsapp/webhook`
+   - **Verify Token**: the same string you stored in `WHATSAPP_VERIFY_TOKEN`.
+
+3. Click **Verify and Save**. Meta will send a `GET` request to the Callback URL with `hub.mode=subscribe`, `hub.verify_token`, and `hub.challenge`. The Worker will respond with `200` and the challenge value, completing verification.
+
+### Cloudflare Worker Route
+
+Add a route in the Cloudflare dashboard (or `wrangler.jsonc`) to forward traffic from the custom domain to this Worker:
+
+```
+marketing.bitxcapital.com/whatsapp/*
+```
+
+### Additional WhatsApp Secrets (set when needed)
+
+| Secret | Description |
+|---|---|
+| `WHATSAPP_APP_SECRET` | App Secret for verifying `X-Hub-Signature-256` payload signatures |
+| `WHATSAPP_ACCESS_TOKEN` | System User or Page access token for sending messages |
+| `WHATSAPP_PHONE_NUMBER_ID` | Sender Phone Number ID from the Meta App Dashboard |
+| `WHATSAPP_ADMIN_NUMBER` | Your internal admin WhatsApp number for notifications |
+
+```bash
+npx wrangler secret put WHATSAPP_APP_SECRET
+npx wrangler secret put WHATSAPP_ACCESS_TOKEN
+npx wrangler secret put WHATSAPP_PHONE_NUMBER_ID
+npx wrangler secret put WHATSAPP_ADMIN_NUMBER
+```
+
+
 The application is built using a microservices architecture that allows independent scaling and development of different components. It leverages Node.js for the server-side logic and MongoDB for data storage.
 
 ## Features

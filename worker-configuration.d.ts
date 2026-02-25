@@ -15,6 +15,11 @@ declare namespace Cloudflare {
 		WP_SITE_URL: string;
 		WP_USER: string;
 		WP_APP_PASSWORD: string;
+		WHATSAPP_VERIFY_TOKEN?: string;
+		WHATSAPP_APP_SECRET?: string;
+		WHATSAPP_ACCESS_TOKEN?: string;
+		WHATSAPP_PHONE_NUMBER_ID?: string;
+		WHATSAPP_ADMIN_NUMBER?: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

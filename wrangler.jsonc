@@ -19,5 +19,18 @@
 		"binding": "BLOG_WORKFLOW_STATE",
 		"id": "6a2ab8802859462b8e2110cddbf9715e"
 		}
-	]
+	],
+	// Secret vars declared here so `npm run cf-typegen` generates correct Env types.
+	// Actual values must be set via: npx wrangler secret put <VAR_NAME>
+	// Do NOT commit real values here.
+	"vars": {
+		"GEMINI_API_KEY": "",
+		"API_KEY": "",
+		"ADMIN_API_KEY": "",
+		"CF_ACCESS_AUD": "",
+		"ALERT_WEBHOOK_URL": "",
+		"WP_SITE_URL": "",
+		"WP_USER": "",
+		"WP_APP_PASSWORD": ""
+	}
 }

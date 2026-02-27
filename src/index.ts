@@ -112,6 +112,38 @@ const WP_MAX_YOAST_DESC_LENGTH = 320;
 /** Maximum length for a Yoast SEO focus keyphrase. */
 const WP_MAX_YOAST_FOCUSKW_LENGTH = 200;
 
+/** Redact a phone number, keeping only the last 4 digits. */
+function redactPhone(phone: string): string {
+  if (!phone || phone.length <= 4) return "****";
+  return `****${phone.slice(-4)}`;
+}
+
+/** Truncate a string to at most `max` characters. */
+function truncate(s: string, max = 80): string {
+  if (!s || s.length <= max) return s;
+  return `${s.slice(0, max)}…`;
+}
+
+/**
+ * Verify the X-Hub-Signature-256 header sent by Meta using HMAC-SHA256.
+ * Returns true if the signature matches; false otherwise.
+ */
+async function verifyWhatsAppSignature(body: string, signature: string, secret: string): Promise<boolean> {
+  try {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw", enc.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false, ["verify"],
+    );
+    const sigHex = signature.replace(/^sha256=/, "");
+    const sigBytes = new Uint8Array((sigHex.match(/.{2}/g) ?? []).map(h => parseInt(h, 16)));
+    return await crypto.subtle.verify("HMAC", key, sigBytes, enc.encode(body));
+  } catch {
+    return false;
+  }
+}
+
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(sanitizeOutput(data)), {
     status,
@@ -145,15 +177,81 @@ export default {
         return new Response("Forbidden", { status: 403 });
       }
       if (request.method === "POST") {
+        // Read raw body so we can verify signature and still parse JSON.
+        const rawBody = await request.text();
+
+        // Optional HMAC-SHA256 signature verification.
+        if (env.WHATSAPP_APP_SECRET) {
+          const sig = request.headers.get("X-Hub-Signature-256");
+          if (!sig || !(await verifyWhatsAppSignature(rawBody, sig, env.WHATSAPP_APP_SECRET))) {
+            console.warn("[whatsapp] signature verification failed");
+            return new Response("Forbidden", { status: 403 });
+          }
+        }
+
+        type WaMessage = { id?: string; from?: string; timestamp?: string; type?: string; text?: { body?: string } };
+        type WaStatus = { id?: string; status?: string; recipient_id?: string };
+        type WaChange = { field?: string; value?: { messages?: WaMessage[]; statuses?: WaStatus[] } };
+        type WaBody = { object?: string; entry?: Array<{ id?: string; changes?: WaChange[] }> };
+
         let body: unknown = null;
         try {
-          body = await request.json();
+          body = JSON.parse(rawBody);
         } catch {
           // ignore parse errors — still acknowledge receipt to Meta
         }
-        const obj = body as { object?: string; entry?: { id?: string }[] } | null;
-        const entryId = Array.isArray(obj?.entry) ? obj.entry[0]?.id : undefined;
-        console.log("[whatsapp] inbound webhook", JSON.stringify({ object: obj?.object, entryId }));
+
+        const wa = body as WaBody | null;
+        const entry0 = Array.isArray(wa?.entry) ? wa.entry[0] : undefined;
+        const entryId = entry0?.id;
+        const changes = entry0?.changes ?? [];
+        const msgChange = changes.find(c => c.field === "messages");
+        const messages = msgChange?.value?.messages ?? [];
+        const statuses = msgChange?.value?.statuses ?? [];
+
+        if (messages.length > 0) {
+          const msg = messages[0];
+          const logEntry: Record<string, unknown> = {
+            object: wa?.object,
+            entryId,
+            event: "messages",
+            msgId: msg.id,
+            from: msg.from ? redactPhone(msg.from) : undefined,
+            timestamp: msg.timestamp,
+            type: msg.type,
+          };
+          if (msg.type === "text") logEntry.text = truncate(msg.text?.body ?? "");
+          console.log("[whatsapp] inbound webhook", JSON.stringify(logEntry));
+
+          // Auto-reply to inbound text messages.
+          if (msg.type === "text" && msg.from && env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID) {
+            fetch(`https://graph.facebook.com/v21.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                messaging_product: "whatsapp",
+                to: msg.from,
+                text: { body: `Received: ${msg.text?.body ?? ""}` },
+              }),
+            }).catch(err => console.error("[whatsapp] auto-reply error", String(err)));
+          }
+        } else if (statuses.length > 0) {
+          const st = statuses[0];
+          console.log("[whatsapp] inbound webhook", JSON.stringify({
+            object: wa?.object,
+            entryId,
+            event: "statuses",
+            statusId: st.id,
+            status: st.status,
+            recipientId: st.recipient_id ? redactPhone(st.recipient_id) : undefined,
+          }));
+        } else {
+          console.log("[whatsapp] inbound webhook", JSON.stringify({ object: wa?.object, entryId }));
+        }
+
         return new Response("OK", { status: 200 });
       }
     }

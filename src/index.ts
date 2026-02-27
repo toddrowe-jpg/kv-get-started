@@ -125,6 +125,37 @@ function truncate(s: string, max = 80): string {
 }
 
 /**
+ * Send a WhatsApp text message via the Cloud API.
+ * Logs success (status code) and, on failure, the status and a truncated body.
+ * Token values are never logged.
+ */
+async function sendWaText(phoneNumberId: string, accessToken: string, to: string, text: string): Promise<void> {
+  try {
+    const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to,
+        type: "text",
+        text: { body: text },
+      }),
+    });
+    if (res.ok) {
+      console.log("[whatsapp] auto-reply sent", res.status);
+    } else {
+      const resBody = await res.text().catch(() => "");
+      console.error("[whatsapp] auto-reply failed", res.status, truncate(resBody));
+    }
+  } catch (err) {
+    console.error("[whatsapp] auto-reply error", String(err));
+  }
+}
+
+/**
  * Verify the X-Hub-Signature-256 header sent by Meta using HMAC-SHA256.
  * Returns true if the signature matches; false otherwise.
  */
@@ -155,7 +186,7 @@ function jsonResponse(data: unknown, status = 200): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     // Handle CORS preflight before any other processing
     const corsResponse = corsMiddleware(request);
     if (corsResponse) return corsResponse;
@@ -187,6 +218,8 @@ export default {
             console.warn("[whatsapp] signature verification failed");
             return new Response("Forbidden", { status: 403 });
           }
+        } else {
+          console.warn("[whatsapp] WHATSAPP_APP_SECRET not configured, skipping signature verification");
         }
 
         type WaMessage = { id?: string; from?: string; timestamp?: string; type?: string; text?: { body?: string } };
@@ -225,18 +258,15 @@ export default {
 
           // Auto-reply to inbound text messages.
           if (msg.type === "text" && msg.from && env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID) {
-            fetch(`https://graph.facebook.com/v21.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                messaging_product: "whatsapp",
-                to: msg.from,
-                text: { body: `Received: ${msg.text?.body ?? ""}` },
-              }),
-            }).catch(err => console.error("[whatsapp] auto-reply error", String(err)));
+            const replyPromise = sendWaText(
+              env.WHATSAPP_PHONE_NUMBER_ID,
+              env.WHATSAPP_ACCESS_TOKEN,
+              msg.from,
+              `Received: ${msg.text?.body ?? ""}`,
+            );
+            // Register with the Workers runtime so the reply completes even after the response is returned.
+            // In test environments (no real ctx), the promise still runs fire-and-forget.
+            ctx?.waitUntil?.(replyPromise);
           }
         } else if (statuses.length > 0) {
           const st = statuses[0];

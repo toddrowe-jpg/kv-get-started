@@ -124,9 +124,11 @@ marketing.bitxcapital.com/whatsapp/*
 | Secret | Description |
 |---|---|
 | `WHATSAPP_APP_SECRET` | App Secret for verifying `X-Hub-Signature-256` payload signatures |
-| `WHATSAPP_ACCESS_TOKEN` | System User or Page access token for sending messages |
-| `WHATSAPP_PHONE_NUMBER_ID` | Sender Phone Number ID from the Meta App Dashboard |
+| `WHATSAPP_ACCESS_TOKEN` | System User or Page access token for **sending** messages (Cloud API). **Not** the same as `WHATSAPP_VERIFY_TOKEN`. |
+| `WHATSAPP_PHONE_NUMBER_ID` | Cloud API Phone Number ID from the Meta App Dashboard (used in the send endpoint `/{phoneNumberId}/messages`) |
 | `WHATSAPP_ADMIN_NUMBER` | Your internal admin WhatsApp number for notifications |
+
+> **Graph API version**: The Worker uses `v25.0` by default (constant `GRAPH_API_VERSION` in `src/index.ts`).
 
 ```bash
 npx wrangler secret put WHATSAPP_APP_SECRET

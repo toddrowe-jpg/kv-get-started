@@ -162,7 +162,7 @@ describe("POST /whatsapp/webhook - auto-reply", () => {
 
     expect(fetchSpy).toHaveBeenCalledOnce();
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://graph.facebook.com/v21.0/12345678/messages");
+    expect(url).toBe("https://graph.facebook.com/v25.0/12345678/messages");
     expect(init.headers).toMatchObject({ "Authorization": "Bearer test-access-token" });
     const sentBody = JSON.parse(init.body as string);
     expect(sentBody.to).toBe("1234567890");

@@ -124,14 +124,17 @@ function truncate(s: string, max = 80): string {
   return `${s.slice(0, max)}…`;
 }
 
+const GRAPH_API_VERSION = "v25.0";
+
 /**
  * Send a WhatsApp text message via the Cloud API.
- * Logs success (status code) and, on failure, the status and a truncated body.
+ * Logs success (status code) and, on failure, the status and structured error fields.
  * Token values are never logged.
  */
 async function sendWaText(phoneNumberId: string, accessToken: string, to: string, text: string): Promise<void> {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`;
   try {
-    const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}/messages`, {
+    const res = await fetch(url, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
@@ -147,8 +150,26 @@ async function sendWaText(phoneNumberId: string, accessToken: string, to: string
     if (res.ok) {
       console.log("[whatsapp] auto-reply sent", res.status);
     } else {
-      const resBody = await res.text().catch(() => "");
-      console.error("[whatsapp] auto-reply failed", res.status, truncate(resBody));
+      let errDetails: Record<string, unknown> = {};
+      try {
+        const json = await res.json() as { error?: Record<string, unknown>; fbtrace_id?: unknown };
+        const e = json?.error ?? {};
+        const raw: Record<string, unknown> = {
+          message: e.message,
+          type: e.type,
+          code: e.code,
+          error_subcode: e.error_subcode,
+          error_data: e.error_data,
+          // fbtrace_id may appear inside error or at top level depending on the API version
+          fbtrace_id: e.fbtrace_id ?? json.fbtrace_id,
+        };
+        // Omit undefined fields to keep logs clean
+        errDetails = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== undefined));
+      } catch {
+        errDetails = { raw: truncate(await res.text().catch(() => "")) };
+      }
+      const apiPath = `/${GRAPH_API_VERSION}/${phoneNumberId}/messages`;
+      console.error("[whatsapp] auto-reply failed", res.status, `path=${apiPath}`, JSON.stringify(errDetails));
     }
   } catch (err) {
     console.error("[whatsapp] auto-reply error", String(err));

@@ -177,6 +177,72 @@ async function sendWaText(phoneNumberId: string, accessToken: string, to: string
 }
 
 /**
+ * Send a WhatsApp template message via the Cloud API.
+ * Logs success (status code) and, on failure, the status and structured error fields.
+ * Token values are never logged.
+ */
+async function sendWaTemplate(
+  phoneNumberId: string,
+  accessToken: string,
+  to: string,
+  templateName: string,
+  languageCode: string,
+  bodyParams: string[],
+): Promise<void> {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to,
+        type: "template",
+        template: {
+          name: templateName,
+          language: { code: languageCode },
+          components: [
+            {
+              type: "body",
+              parameters: bodyParams.map(text => ({ type: "text", text })),
+            },
+          ],
+        },
+      }),
+    });
+    if (res.ok) {
+      console.log("[whatsapp] template sent", res.status);
+    } else {
+      let errDetails: Record<string, unknown> = {};
+      try {
+        const json = await res.json() as { error?: Record<string, unknown>; fbtrace_id?: unknown };
+        const e = json?.error ?? {};
+        const raw: Record<string, unknown> = {
+          message: e.message,
+          type: e.type,
+          code: e.code,
+          error_subcode: e.error_subcode,
+          error_data: e.error_data,
+          // fbtrace_id may appear inside error or at top level depending on the API version
+          fbtrace_id: e.fbtrace_id ?? json.fbtrace_id,
+        };
+        // Omit undefined fields to keep logs clean
+        errDetails = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== undefined));
+      } catch {
+        errDetails = { raw: truncate(await res.text().catch(() => "")) };
+      }
+      const apiPath = `/${GRAPH_API_VERSION}/${phoneNumberId}/messages`;
+      console.error("[whatsapp] template failed", res.status, `path=${apiPath}`, JSON.stringify(errDetails));
+    }
+  } catch (err) {
+    console.error("[whatsapp] template error", String(err));
+  }
+}
+
+/**
  * Verify the X-Hub-Signature-256 header sent by Meta using HMAC-SHA256.
  * Returns true if the signature matches; false otherwise.
  */
@@ -1039,6 +1105,19 @@ export default {
         };
 
         const result = await wpPublishPost(env.WP_SITE_URL, env.WP_USER, env.WP_APP_PASSWORD, input);
+
+        if (env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID && env.WHATSAPP_ADMIN_NUMBER) {
+          const notifyPromise = sendWaTemplate(
+            env.WHATSAPP_PHONE_NUMBER_ID,
+            env.WHATSAPP_ACCESS_TOKEN,
+            env.WHATSAPP_ADMIN_NUMBER,
+            "blog_daily_ready",
+            "en_US",
+            [input.title, result.wpLink],
+          );
+          ctx?.waitUntil?.(notifyPromise);
+        }
+
         return securityHeadersMiddleware(jsonResponse(result, 201));
       }
 

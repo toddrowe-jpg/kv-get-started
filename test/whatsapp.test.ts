@@ -268,3 +268,106 @@ describe("POST /whatsapp/webhook - signature verification", () => {
     expect(res.status).toBe(200);
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /wp/publish — WhatsApp template notification
+// ---------------------------------------------------------------------------
+
+describe("POST /wp/publish - WhatsApp template notification", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeWpEnv(extras: Partial<Env> = {}): Env {
+    return makeEnv("some-token", {
+      WP_SITE_URL: "https://example.com",
+      WP_USER: "wp-user",
+      WP_APP_PASSWORD: "wp-pass",
+      ...extras,
+    });
+  }
+
+  it("calls fetch to send a WhatsApp template notification after successful publish when all WA env vars are present", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url: RequestInfo | URL) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/wp-json/wp/v2/posts")) {
+        return new Response(
+          JSON.stringify({ id: 123, link: "https://example.com/?p=123", status: "draft" }),
+          { status: 201 },
+        );
+      }
+      // taxonomy lookups
+      if (urlStr.includes("categories") || urlStr.includes("tags")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      // WhatsApp Graph API
+      return new Response("{}", { status: 200 });
+    });
+
+    const env = makeWpEnv({
+      WHATSAPP_ACCESS_TOKEN: "wa-access-token",
+      WHATSAPP_PHONE_NUMBER_ID: "11111111",
+      WHATSAPP_ADMIN_NUMBER: "27821234567",
+    });
+
+    const req = new Request(`${BASE_URL}/wp/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "  My Draft Post  ", contentHtml: "<p>Content</p>" }),
+    });
+
+    const res = await worker.fetch(req, env, {} as ExecutionContext);
+    expect(res.status).toBe(201);
+
+    // Give the fire-and-forget fetch a tick to run.
+    await new Promise(r => setTimeout(r, 10));
+
+    // Find the Graph API call (not the WP call)
+    const graphCall = fetchSpy.mock.calls.find(([url]) =>
+      String(url).startsWith("https://graph.facebook.com/")
+    );
+    expect(graphCall).toBeDefined();
+    const [url, init] = graphCall as [string, RequestInit];
+    expect(url).toBe("https://graph.facebook.com/v25.0/11111111/messages");
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer wa-access-token");
+    const sentBody = JSON.parse(init.body as string);
+    expect(sentBody.to).toBe("27821234567");
+    expect(sentBody.type).toBe("template");
+    expect(sentBody.template.name).toBe("blog_daily_ready");
+    expect(sentBody.template.language.code).toBe("en_US");
+    const params = sentBody.template.components[0].parameters;
+    expect(params[0]).toMatchObject({ type: "text", text: "My Draft Post" });
+    expect(params[1]).toMatchObject({ type: "text", text: "https://example.com/?p=123" });
+  });
+
+  it("does not call the Graph API for WA template when WhatsApp env vars are missing", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url: RequestInfo | URL) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/wp-json/wp/v2/posts")) {
+        return new Response(
+          JSON.stringify({ id: 456, link: "https://example.com/?p=456", status: "draft" }),
+          { status: 201 },
+        );
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+
+    const env = makeWpEnv(); // no WHATSAPP_* vars
+
+    const req = new Request(`${BASE_URL}/wp/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "My Post", contentHtml: "<p>Content</p>" }),
+    });
+
+    const res = await worker.fetch(req, env, {} as ExecutionContext);
+    expect(res.status).toBe(201);
+
+    await new Promise(r => setTimeout(r, 10));
+
+    const graphCall = fetchSpy.mock.calls.find(([url]) =>
+      String(url).startsWith("https://graph.facebook.com/")
+    );
+    expect(graphCall).toBeUndefined();
+  });
+});

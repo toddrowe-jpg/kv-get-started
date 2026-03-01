@@ -137,6 +137,23 @@ npx wrangler secret put WHATSAPP_PHONE_NUMBER_ID
 npx wrangler secret put WHATSAPP_ADMIN_NUMBER
 ```
 
+### WhatsApp Template: `blog_daily_ready`
+
+When `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, and `WHATSAPP_ADMIN_NUMBER` are all configured, every successful `/wp/publish` call sends an admin notification to `WHATSAPP_ADMIN_NUMBER` using the pre-approved WhatsApp template **`blog_daily_ready`**.
+
+| Field | Value |
+|---|---|
+| Template name | `blog_daily_ready` |
+| Category | Utility |
+| Language | `en_US` |
+| Body text | `Today's blog draft is ready: "{{1}}". Review in WordPress: {{2}}` |
+| `{{1}}` | Post title (trimmed) |
+| `{{2}}` | WordPress post link returned by the REST API |
+
+> **Note:** The template must be created and approved in the [Meta Business Manager](https://business.facebook.com/wa/manage/message-templates/) before it can be used. The Worker does not create or manage Meta templates.
+
+The notification is sent fire-and-forget via `ctx.waitUntil()` so it does not delay the `/wp/publish` response.
+
 
 The application is built using a microservices architecture that allows independent scaling and development of different components. It leverages Node.js for the server-side logic and MongoDB for data storage.
 
@@ -152,6 +169,8 @@ The application is built using a microservices architecture that allows independ
 
 #### `POST /wp/publish`
 Creates a post (draft or published) on the configured WordPress site via the REST API. Requires `WP_SITE_URL`, `WP_USER`, and `WP_APP_PASSWORD` secrets.
+
+After a successful post creation, if `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, and `WHATSAPP_ADMIN_NUMBER` are all configured, the Worker sends an admin notification to `WHATSAPP_ADMIN_NUMBER` using the `blog_daily_ready` WhatsApp template (see [WhatsApp Template: `blog_daily_ready`](#whatsapp-template-blog_daily_ready) above). The response is not delayed — the notification is sent fire-and-forget.
 
 The Worker composes the final post content as **Gutenberg block markup** before sending it to WordPress:
 1. Prepends a `<!-- wp:heading {"level":1} -->` H1 block using `title` if the content lacks one.

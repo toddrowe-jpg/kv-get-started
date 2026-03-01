@@ -187,7 +187,7 @@ async function sendWaTemplate(
   to: string,
   templateName: string,
   languageCode: string,
-  bodyParams: string[],
+  bodyParams: { name: string; text: string }[],
 ): Promise<void> {
   const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`;
   try {
@@ -207,7 +207,7 @@ async function sendWaTemplate(
           components: [
             {
               type: "body",
-              parameters: bodyParams.map(text => ({ type: "text", text })),
+              parameters: bodyParams.map(({ name, text }) => ({ type: "text", parameter_name: name, text })),
             },
           ],
         },
@@ -1111,9 +1111,12 @@ export default {
             env.WHATSAPP_PHONE_NUMBER_ID,
             env.WHATSAPP_ACCESS_TOKEN,
             env.WHATSAPP_ADMIN_NUMBER,
-            "blog_daily_ready",
+            "new_draft_created",
             "en_US",
-            [input.title, result.wpLink],
+            [
+              { name: "blog_title", text: input.title },
+              { name: "wp_link", text: result.wpLink },
+            ],
           );
           ctx?.waitUntil?.(notifyPromise);
         }

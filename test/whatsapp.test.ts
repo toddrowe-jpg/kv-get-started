@@ -333,11 +333,11 @@ describe("POST /wp/publish - WhatsApp template notification", () => {
     const sentBody = JSON.parse(init.body as string);
     expect(sentBody.to).toBe("27821234567");
     expect(sentBody.type).toBe("template");
-    expect(sentBody.template.name).toBe("blog_daily_ready");
+    expect(sentBody.template.name).toBe("new_draft_created");
     expect(sentBody.template.language.code).toBe("en_US");
     const params = sentBody.template.components[0].parameters;
-    expect(params[0]).toMatchObject({ type: "text", text: "My Draft Post" });
-    expect(params[1]).toMatchObject({ type: "text", text: "https://example.com/?p=123" });
+    expect(params[0]).toMatchObject({ type: "text", parameter_name: "blog_title", text: "My Draft Post" });
+    expect(params[1]).toMatchObject({ type: "text", parameter_name: "wp_link", text: "https://example.com/?p=123" });
   });
 
   it("does not call the Graph API for WA template when WhatsApp env vars are missing", async () => {

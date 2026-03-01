@@ -393,8 +393,9 @@ describe("runDailyAutomation", () => {
     let fetchCallIndex = 0;
     globalThis.fetch = async (url: string | Request, _init?: RequestInit) => {
       const urlStr = typeof url === "string" ? url : url.toString();
-      // Gemini API call
-      if (urlStr.includes("generativelanguage.googleapis.com")) {
+      // Gemini API call — match only when the host is exactly generativelanguage.googleapis.com
+      const parsedUrl = (() => { try { return new URL(urlStr); } catch { return null; } })();
+      if (parsedUrl?.hostname === "generativelanguage.googleapis.com") {
         return new Response(
           JSON.stringify({
             candidates: [{ content: { parts: [{ text: JSON.stringify(fakeGeneratedContent) }] } }],
@@ -433,7 +434,8 @@ describe("runDailyAutomation", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (url: string | Request) => {
       const urlStr = typeof url === "string" ? url : url.toString();
-      if (urlStr.includes("generativelanguage.googleapis.com")) {
+      const parsedUrl = (() => { try { return new URL(urlStr); } catch { return null; } })();
+      if (parsedUrl?.hostname === "generativelanguage.googleapis.com") {
         return new Response(
           JSON.stringify({
             candidates: [{ content: { parts: [{ text: JSON.stringify(fakeGeneratedContent) }] } }],

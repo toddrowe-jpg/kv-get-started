@@ -256,7 +256,7 @@ export function buildDailyDraftPrompt(item: QueueTitle, brand: BrandConfig): str
 // WhatsApp notification helper (self-contained to avoid circular imports)
 // ---------------------------------------------------------------------------
 
-const GRAPH_API_VERSION_DA = "v25.0";
+const WHATSAPP_GRAPH_API_VERSION = "v25.0";
 
 async function sendDraftNotification(
   phoneNumberId: string,
@@ -265,7 +265,7 @@ async function sendDraftNotification(
   blogTitle: string,
   wpLink: string,
 ): Promise<void> {
-  const url = `https://graph.facebook.com/${GRAPH_API_VERSION_DA}/${phoneNumberId}/messages`;
+  const url = `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${phoneNumberId}/messages`;
   try {
     const res = await fetch(url, {
       method: "POST",

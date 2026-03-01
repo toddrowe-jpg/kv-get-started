@@ -51,6 +51,11 @@ export interface WpPublishInput {
    * https://bitxcapital.com/application-journey/ (default: true).
    */
   includeApplyNowButton?: boolean;
+  /**
+   * WordPress media attachment ID to set as the post's featured image.
+   * Obtain via wpUploadMedia() and pass the returned ID here.
+   */
+  featuredMediaId?: number;
 }
 
 export interface WpPublishResult {
@@ -356,6 +361,9 @@ export async function wpPublishPost(
   };
   if (categoryIds.length > 0) postPayload.categories = categoryIds;
   if (tagIds.length > 0) postPayload.tags = tagIds;
+  if (input.featuredMediaId !== undefined && input.featuredMediaId > 0) {
+    postPayload.featured_media = input.featuredMediaId;
+  }
 
   // Yoast SEO meta (requires the bitx-yoast-rest plugin on the WP site)
   if (input.yoast) {
@@ -398,4 +406,47 @@ export async function wpPublishPost(
     categoryIds,
     tagIds,
   };
+}
+
+/**
+ * Upload an image (binary) to the WordPress Media Library via REST API.
+ *
+ * @param siteUrl     - WordPress site base URL (no trailing slash)
+ * @param user        - WordPress username with Application Password
+ * @param appPassword - Application Password (spaces are stripped automatically)
+ * @param imageData   - Raw image bytes
+ * @param filename    - Desired filename (e.g. "hero-image.png")
+ * @param mimeType    - MIME type (e.g. "image/png")
+ * @returns The newly created media attachment ID
+ */
+export async function wpUploadMedia(
+  siteUrl: string,
+  user: string,
+  appPassword: string,
+  imageData: Uint8Array,
+  filename: string,
+  mimeType: string,
+): Promise<number> {
+  const authHeader = buildBasicAuthHeader(user, appPassword);
+  const resp = await fetch(`${siteUrl}/wp-json/wp/v2/media`, {
+    method: "POST",
+    headers: {
+      Authorization: authHeader,
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Type": mimeType,
+    },
+    body: imageData,
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new WpPublishError(
+      `WordPress media upload failed: HTTP ${resp.status}`,
+      resp.status,
+      body,
+    );
+  }
+
+  const media = (await resp.json()) as { id: number };
+  return media.id;
 }

@@ -23,6 +23,18 @@ import {
   isWorkflowStuck,
   sendWebhookAlert,
 } from "./observability";
+import {
+  getBrandConfig,
+  setBrandConfig,
+  getTitleQueue,
+  setTitleQueue,
+  getQueueCursor,
+  setQueueCursor,
+  runDailyAutomation,
+  isWeekday6amET,
+  type BrandConfig,
+  type QueueTitle,
+} from "./dailyAutomation";
 
 export interface Env {
   AI: {
@@ -1124,6 +1136,121 @@ export default {
         return securityHeadersMiddleware(jsonResponse(result, 201));
       }
 
+      // ── Brand config endpoints ──────────────────────────────────────────
+
+      // PUT /brand — set (or replace) the brand config stored in KV.
+      // Requires admin-level authentication (ADMIN_API_KEY or CF_ACCESS_AUD).
+      if (pathname === "/brand" && request.method === "PUT") {
+        if (!checkAdminAccess(request, env.ADMIN_API_KEY) || !(await checkCfAccessJwt(request, env.CF_ACCESS_AUD))) {
+          return securityHeadersMiddleware(
+            errorResponse(403, "Forbidden: admin access credentials required", context.requestId)
+          );
+        }
+        let body: Partial<BrandConfig>;
+        try {
+          body = await request.json();
+        } catch {
+          return securityHeadersMiddleware(jsonResponse({ error: "Invalid JSON body" }, 400));
+        }
+        const required: Array<keyof BrandConfig> = [
+          "brand_name", "logo_url", "primary_color", "secondary_color",
+          "voice_style", "disclaimer", "image_style",
+        ];
+        for (const field of required) {
+          if (typeof body[field] !== "string" || !(body[field] as string).trim()) {
+            return securityHeadersMiddleware(jsonResponse({ error: `Missing or empty field: ${field}` }, 400));
+          }
+        }
+        const config: BrandConfig = {
+          brand_name: (body.brand_name as string).trim(),
+          logo_url: (body.logo_url as string).trim(),
+          primary_color: (body.primary_color as string).trim(),
+          secondary_color: (body.secondary_color as string).trim(),
+          voice_style: (body.voice_style as string).trim(),
+          disclaimer: (body.disclaimer as string).trim(),
+          image_style: (body.image_style as string).trim(),
+        };
+        await setBrandConfig(env.BLOG_WORKFLOW_STATE, config);
+        return securityHeadersMiddleware(jsonResponse({ ok: true, brand_name: config.brand_name }));
+      }
+
+      // GET /brand — retrieve the current brand config.
+      if (pathname === "/brand" && request.method === "GET") {
+        const config = await getBrandConfig(env.BLOG_WORKFLOW_STATE);
+        if (!config) return securityHeadersMiddleware(jsonResponse({ error: "Brand config not set" }, 404));
+        return securityHeadersMiddleware(jsonResponse(config));
+      }
+
+      // ── Title queue endpoints ───────────────────────────────────────────
+
+      // POST /queue/titles — upload (replace) the entire title backlog.
+      // Requires admin-level authentication.
+      if (pathname === "/queue/titles" && request.method === "POST") {
+        if (!checkAdminAccess(request, env.ADMIN_API_KEY) || !(await checkCfAccessJwt(request, env.CF_ACCESS_AUD))) {
+          return securityHeadersMiddleware(
+            errorResponse(403, "Forbidden: admin access credentials required", context.requestId)
+          );
+        }
+        let body: { titles?: unknown };
+        try {
+          body = await request.json();
+        } catch {
+          return securityHeadersMiddleware(jsonResponse({ error: "Invalid JSON body" }, 400));
+        }
+        if (!Array.isArray(body.titles)) {
+          return securityHeadersMiddleware(jsonResponse({ error: "Field titles must be an array" }, 400));
+        }
+        if (body.titles.length === 0) {
+          return securityHeadersMiddleware(jsonResponse({ error: "Field titles must not be empty" }, 400));
+        }
+        const titles: QueueTitle[] = [];
+        for (let i = 0; i < body.titles.length; i++) {
+          const t = body.titles[i] as Record<string, unknown>;
+          if (typeof t?.title !== "string" || !t.title.trim()) {
+            return securityHeadersMiddleware(jsonResponse({ error: `titles[${i}].title must be a non-empty string` }, 400));
+          }
+          titles.push({
+            title: (t.title as string).trim(),
+            category: typeof t.category === "string" ? t.category.trim() : undefined,
+            tags: Array.isArray(t.tags) ? (t.tags as unknown[]).map(String) : undefined,
+            primary_keyword: typeof t.primary_keyword === "string" ? t.primary_keyword.trim() : undefined,
+            loan_type: typeof t.loan_type === "string" ? t.loan_type.trim() : undefined,
+            directions: typeof t.directions === "string" ? t.directions.trim() : undefined,
+          });
+        }
+        await setTitleQueue(env.BLOG_WORKFLOW_STATE, titles);
+        await setQueueCursor(env.BLOG_WORKFLOW_STATE, 0);
+        return securityHeadersMiddleware(jsonResponse({ ok: true, count: titles.length, cursor: 0 }, 201));
+      }
+
+      // GET /queue/status — check queue progress.
+      if (pathname === "/queue/status" && request.method === "GET") {
+        const [titles, cursor] = await Promise.all([
+          getTitleQueue(env.BLOG_WORKFLOW_STATE),
+          getQueueCursor(env.BLOG_WORKFLOW_STATE),
+        ]);
+        return securityHeadersMiddleware(jsonResponse({
+          total: titles.length,
+          cursor,
+          remaining: Math.max(0, titles.length - cursor),
+          exhausted: cursor >= titles.length,
+          nextTitle: cursor < titles.length ? titles[cursor].title : null,
+        }));
+      }
+
+      // POST /queue/run-next — manually trigger one daily automation run (for testing).
+      // Requires admin-level authentication.
+      if (pathname === "/queue/run-next" && request.method === "POST") {
+        if (!checkAdminAccess(request, env.ADMIN_API_KEY) || !(await checkCfAccessJwt(request, env.CF_ACCESS_AUD))) {
+          return securityHeadersMiddleware(
+            errorResponse(403, "Forbidden: admin access credentials required", context.requestId)
+          );
+        }
+        const result = await runDailyAutomation(env);
+        const httpStatus = result.status === "published" ? 201 : result.status === "error" ? 500 : 200;
+        return securityHeadersMiddleware(jsonResponse(result, httpStatus));
+      }
+
       return securityHeadersMiddleware(jsonResponse({
         message: "Workers AI & Gemini endpoints",
         routes: {
@@ -1140,6 +1267,11 @@ export default {
           "/workflow/execute (POST)": "Run the full workflow end-to-end (research → outline → draft) in a single call",
           "/workflow/:id (GET)": "Retrieve workflow state, phase outputs, logs, and errors",
           "/wp/publish (POST)": "Publish or draft a post to WordPress as Gutenberg blocks with optional Yoast SEO meta, Apply Now button, Related Links, and Yoast FAQ block",
+          "/brand (PUT)": "Set brand config (admin) — stored in KV under brand:default",
+          "/brand (GET)": "Retrieve current brand config",
+          "/queue/titles (POST)": "Upload title backlog (admin) — replaces queue and resets cursor",
+          "/queue/status (GET)": "Check queue progress (total, cursor, remaining, next title)",
+          "/queue/run-next (POST)": "Manually trigger one daily automation run (admin, for testing)",
           "/admin/logs?date= (GET)": "Retrieve observability event logs for a given date (default: today)",
           "/admin/alerts (GET)": "Retrieve all stored alerts",
           "/admin/abuse?ip= (GET)": "Retrieve abuse record for a specific IP address",
@@ -1195,5 +1327,29 @@ export default {
       if (env.ALERT_WEBHOOK_URL) await sendWebhookAlert(env.ALERT_WEBHOOK_URL, alert);
       return securityHeadersMiddleware(jsonResponse({ route: pathname, error: message }, 500));
     }
+  },
+
+  /**
+   * Cron-triggered scheduled handler.
+   *
+   * Wrangler cron is configured to fire at 10:00 UTC (covers EDT, UTC-4) and
+   * 11:00 UTC (covers EST, UTC-5) on weekdays.  The handler calls isWeekday6amET()
+   * to confirm that the current America/New_York time is 06:xx before running,
+   * so exactly one of the two daily triggers performs work each day.
+   */
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const now = new Date();
+    if (!isWeekday6amET(now)) {
+      console.log("[scheduled] not 6 AM ET weekday — skipping");
+      return;
+    }
+    console.log("[scheduled] 6 AM ET weekday — starting daily automation");
+    ctx.waitUntil(
+      runDailyAutomation(env).then((result) => {
+        console.log("[scheduled] daily automation result:", JSON.stringify(result));
+      }).catch((err) => {
+        console.error("[scheduled] daily automation error:", String(err));
+      }),
+    );
   },
 };

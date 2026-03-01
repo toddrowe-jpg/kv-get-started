@@ -926,4 +926,188 @@ curl "https://<worker-url>/admin/status" \
 
 A workflow is classified as **stuck** when it has been in `running` status for more than 5 minutes without an `updatedAt` refresh.
 
+---
+
+## Daily Automated Blog-Draft Generation
+
+The Worker includes a **fully autonomous daily draft pipeline** that:
+
+1. Fires on every **weekday (Mon–Fri) at 6:00 AM America/New_York** via Cloudflare Cron Triggers.
+2. Pops the next title from a KV-backed queue.
+3. Generates a complete WordPress draft (body HTML with ToC, TL;DR, pull-quote, summary, related links, Yoast FAQ block, Yoast SEO meta) in a single Gemini call.
+4. Generates a photorealistic **hero image** via Cloudflare Workers AI (`@cf/black-forest-labs/flux-1-schnell`), uploads it to WordPress Media, and attaches it as the post's featured image.
+5. Publishes the post as a **WordPress draft** via the existing `wpPublishPost` flow (Gutenberg blocks, Yoast meta, Apply Now CTA, related links, FAQ).
+6. Sends a **WhatsApp admin notification** using the `new_draft_created` template with `blog_title` and `wp_link` named parameters.
+7. Repeating brand items (logo URL, colours, voice style, disclaimer, image prompt prefix) are stored **once** in KV under `brand:default` and reused every run — no reprocessing cost.
+
+### Cron schedule
+
+Two cron triggers cover both ET offsets (the handler ignores the "wrong" one):
+
+| Cron (UTC) | ET clock | Season |
+|---|---|---|
+| `0 10 * * 1-5` | 6:00 AM | Summer (EDT, UTC-4) |
+| `0 11 * * 1-5` | 6:00 AM | Winter (EST, UTC-5) |
+
+Both are defined in `wrangler.jsonc`. The `scheduled` handler calls `isWeekday6amET(new Date())` and exits immediately if the current NY time is not 6 AM on a weekday, so exactly one of the two triggers performs work each day.
+
+---
+
+### Step 1 — Set brand config (once)
+
+```bash
+curl -X PUT "https://<worker-url>/brand" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <ADMIN_API_KEY>" \
+  -d '{
+    "brand_name":      "BITX Capital",
+    "logo_url":        "https://bitxcapital.com/wp-content/uploads/bitx-logo.png",
+    "primary_color":   "#1A2E5A",
+    "secondary_color": "#E87722",
+    "voice_style":     "Professional, approachable, South African",
+    "disclaimer":      "BITX Capital is a registered credit provider. NCA compliant.",
+    "image_style":     "photorealistic south african small business owner professional headshot modern office"
+  }'
+```
+
+**Response:**
+```json
+{ "ok": true, "brand_name": "BITX Capital" }
+```
+
+The config is stored under the KV key `brand:default` and reused by every subsequent scheduled run.
+
+**Retrieve current config:**
+```bash
+curl "https://<worker-url>/brand" \
+  -H "Authorization: Bearer <API_KEY>"
+```
+
+---
+
+### Step 2 — Load ~30 blog titles (once)
+
+Upload the full backlog in a single `POST /queue/titles` call. The queue replaces any existing titles and resets the cursor to 0.
+
+```bash
+curl -X POST "https://<worker-url>/queue/titles" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <ADMIN_API_KEY>" \
+  -d '{
+    "titles": [
+      {
+        "title": "How to Get a Business Loan in South Africa",
+        "category": "Business Finance",
+        "tags": ["business loans", "south africa"],
+        "primary_keyword": "business loan south africa"
+      },
+      {
+        "title": "Understanding Invoice Discounting",
+        "category": "Working Capital",
+        "primary_keyword": "invoice discounting",
+        "loan_type": "invoice_discounting",
+        "directions": "Focus on cash-flow benefits for SMEs"
+      }
+    ]
+  }'
+```
+
+**Accepted fields per title:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `title` | `string` | Yes | Blog post title |
+| `category` | `string` | No | WordPress category name |
+| `tags` | `string[]` | No | WordPress tag names |
+| `primary_keyword` | `string` | No | Primary SEO keyword (defaults to title) |
+| `loan_type` | `string` | No | Loan-type context injected into the prompt |
+| `directions` | `string` | No | Extra writing directions for the prompt |
+
+**Response:**
+```json
+{ "ok": true, "count": 30, "cursor": 0 }
+```
+
+**Check progress:**
+```bash
+curl "https://<worker-url>/queue/status" \
+  -H "Authorization: Bearer <API_KEY>"
+```
+```json
+{
+  "total": 30,
+  "cursor": 5,
+  "remaining": 25,
+  "exhausted": false,
+  "nextTitle": "Understanding Invoice Discounting"
+}
+```
+
+---
+
+### Step 3 — Manual test run
+
+Trigger one automation run immediately (without waiting for the cron) to verify the full pipeline end-to-end:
+
+```bash
+curl -X POST "https://<worker-url>/queue/run-next" \
+  -H "Authorization: Bearer <ADMIN_API_KEY>"
+```
+
+**Success response (201):**
+```json
+{
+  "status": "published",
+  "message": "Draft created: https://example.com/?p=42",
+  "postId": 42,
+  "wpLink": "https://example.com/?p=42"
+}
+```
+
+**Other status values:**
+
+| `status` | HTTP | Meaning |
+|---|---|---|
+| `published` | 201 | Draft created successfully |
+| `skipped` | 200 | Brand config not found — set it via `PUT /brand` |
+| `exhausted` | 200 | All queued titles have been published |
+| `error` | 500 | A required credential is missing or a generation/publish step failed |
+
+---
+
+### Brand config KV storage
+
+| KV key | Content |
+|---|---|
+| `brand:default` | `BrandConfig` JSON object |
+| `queue:titles` | `QueueTitle[]` JSON array |
+| `queue:cursor` | Integer string — index of the next title to process |
+
+All three keys live in the existing `BLOG_WORKFLOW_STATE` KV namespace (no extra namespace needed).
+
+### Brand header block
+
+Every auto-generated post begins with a branded header Gutenberg HTML block containing the logo and primary brand colour, followed by the summary excerpt and TL;DR, then the full body. The brand header is injected before the content is passed to `buildContentBlocks`.
+
+### Hero image generation
+
+1. The image prompt is: `<brand.image_style>, <post title>`.
+2. Cloudflare Workers AI model: `@cf/black-forest-labs/flux-1-schnell` (8 steps).
+3. The returned image bytes are uploaded to WordPress Media via `POST /wp-json/wp/v2/media`.
+4. The returned media ID is set as `featured_media` on the post.
+
+If image generation or upload fails, the error is logged and the draft is still created without a featured image.
+
+---
+
+### New Brand / Queue endpoint summary
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/brand` | `PUT` | Admin | Set (or replace) brand config |
+| `/brand` | `GET` | API key | Retrieve current brand config |
+| `/queue/titles` | `POST` | Admin | Upload title backlog (replaces queue, resets cursor) |
+| `/queue/status` | `GET` | API key | Check queue progress |
+| `/queue/run-next` | `POST` | Admin | Manually trigger one daily automation run |
+
 

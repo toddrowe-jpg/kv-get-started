@@ -101,8 +101,19 @@ export function parseGeminiError(
   return new GeminiApiError(geminiMessage, upstreamStatus, geminiStatus, geminiCode);
 }
 
-const GEMINI_API_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent";
+/**
+ * Default Gemini model used when the `GEMINI_MODEL` environment variable is
+ * not set.  Choose a model that is stable and supported in the `v1beta` API.
+ */
+export const GEMINI_DEFAULT_MODEL = "gemini-2.0-flash";
+
+const GEMINI_API_BASE =
+  "https://generativelanguage.googleapis.com/v1beta/models";
+
+/** Build the full generateContent URL for the given model. */
+export function buildGeminiUrl(model: string): string {
+  return `${GEMINI_API_BASE}/${model}:generateContent`;
+}
 
 /**
  * Calls the Gemini generateContent API and returns the generated text.
@@ -110,14 +121,16 @@ const GEMINI_API_URL =
  * @param apiKey  - The Gemini API key.
  * @param prompt  - The prompt to send.
  * @param context - Optional context label for error logging.
+ * @param model   - The Gemini model to use. Defaults to {@link GEMINI_DEFAULT_MODEL}.
  * @throws {@link GeminiApiError} on API-level errors with an appropriate HTTP status.
  */
 export async function geminiGenerate(
   apiKey: string,
   prompt: string,
   context?: string,
+  model: string = GEMINI_DEFAULT_MODEL,
 ): Promise<string> {
-  const res = await fetch(GEMINI_API_URL, {
+  const res = await fetch(buildGeminiUrl(model), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

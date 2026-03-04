@@ -1,4 +1,4 @@
-import { GeminiApiError, geminiGenerate } from "./gemini";
+import { GeminiApiError, geminiGenerate, GEMINI_DEFAULT_MODEL } from "./gemini";
 import { WorkflowStore, type WorkflowEntry } from "./workflowStore";
 import { QuotaStore, QuotaExceededError } from "./quotaStore";
 import { wpPublishPost, WpPublishError, type WpPublishInput, type YoastMeta, type RelatedLink, type FaqItem } from "./wpPublish";
@@ -42,6 +42,12 @@ export interface Env {
   };
   /** Gemini API key — must be set via: npx wrangler secret put GEMINI_API_KEY */
   GEMINI_API_KEY: string;
+  /**
+   * Optional Gemini model override. Defaults to "gemini-2.0-flash" when not set.
+   * Must match the model recorded in the phase registry.
+   * Set via: npx wrangler secret put GEMINI_MODEL
+   */
+  GEMINI_MODEL?: string;
   /** KV namespace for persisting blog workflow state, logs, and errors. */
   BLOG_WORKFLOW_STATE: KVNamespace;
   /** Optional Bearer token for API authentication. Set via: npx wrangler secret put API_KEY */
@@ -572,7 +578,8 @@ export default {
         if (q.length > 500) return securityHeadersMiddleware(jsonResponse({ error: "Query param q exceeds maximum length of 500 characters" }, 400));
         await quota.consumeTokens(1500, "gemini/research");
         // Enforce role separation: research phase must use the registered model
-        assertPhaseModel("research", "gemini-1.5-flash-latest");
+        const geminiModel = env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
+        assertPhaseModel("research", geminiModel);
         const prompt =
           `You are a blog research assistant. Return a JSON object (no markdown fences) with the following keys:\n` +
           `"topic": the research topic,\n` +
@@ -581,7 +588,7 @@ export default {
           `"suggestedHeadings": an array of 4-6 H2 headings for a blog post,\n` +
           `"sources": an array of up to 5 suggested reference source titles.\n` +
           `Topic: ${q}`;
-        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt, "research");
+        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt, "research", geminiModel);
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
@@ -604,13 +611,14 @@ export default {
         if (body.draft.length > 20000) return securityHeadersMiddleware(jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400));
         await quota.consumeTokens(3000, "gemini/edit");
         // Enforce role separation: edit phase must use the registered model
-        assertPhaseModel("edit", "gemini-1.5-flash-latest");
+        const geminiModel = env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
+        assertPhaseModel("edit", geminiModel);
         const prompt =
           `You are an expert blog editor. Revise the following blog draft to improve EEAT (Experience, Expertise, Authoritativeness, Trustworthiness), ` +
           `clarity, structure, and include a compelling call-to-action. ` +
           `Return only the revised Markdown text with no additional commentary.\n\n` +
           `DRAFT:\n${body.draft}`;
-        const revised = await geminiGenerate(env.GEMINI_API_KEY, prompt, "edit");
+        const revised = await geminiGenerate(env.GEMINI_API_KEY, prompt, "edit", geminiModel);
         return securityHeadersMiddleware(jsonResponse({ revised }));
       }
 
@@ -627,7 +635,8 @@ export default {
         if (body.draft.length > 20000) return securityHeadersMiddleware(jsonResponse({ error: "Field draft exceeds maximum length of 20000 characters" }, 400));
         await quota.consumeTokens(3000, "gemini/factcheck");
         // Enforce role separation: factcheck phase must use the registered model
-        assertPhaseModel("factcheck", "gemini-1.5-flash-latest");
+        const geminiModel = env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
+        assertPhaseModel("factcheck", geminiModel);
         const sourcesText = (body.sources ?? [])
           .map((s, i) => {
             const title = typeof s.title === "string" ? s.title : "";
@@ -645,7 +654,7 @@ export default {
           `"suggestedRewrite": a corrected version of the claim tied to a provided source, or empty string if supported.\n\n` +
           `SOURCES:\n${sourcesText || "(none provided)"}\n\n` +
           `DRAFT:\n${body.draft}`;
-        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt, "factcheck");
+        const raw = await geminiGenerate(env.GEMINI_API_KEY, prompt, "factcheck", geminiModel);
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw);
@@ -679,7 +688,8 @@ export default {
 
         try {
           // Enforce role separation: research phase must use the registered model
-          assertPhaseModel("research", "gemini-1.5-flash-latest");
+          const geminiModel = env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
+          assertPhaseModel("research", geminiModel);
           const researchPrompt =
             `You are a blog research assistant. Return a JSON object (no markdown fences) with the following keys:\n` +
             `"topic": the research topic,\n` +
@@ -688,7 +698,7 @@ export default {
             `"suggestedHeadings": an array of 4-6 H2 headings for a blog post,\n` +
             `"sources": an array of up to 5 suggested reference source titles.\n` +
             `Topic: ${body.topic}`;
-          const raw = await geminiGenerate(env.GEMINI_API_KEY, researchPrompt, "workflow/research");
+          const raw = await geminiGenerate(env.GEMINI_API_KEY, researchPrompt, "workflow/research", geminiModel);
           let researchOutput: unknown;
           try {
             researchOutput = JSON.parse(raw);
@@ -741,7 +751,8 @@ export default {
 
         await quota.consumeTokens(1500, "workflow/outline");
         // Enforce role separation: outline phase must use the registered model
-        assertPhaseModel("outline", "gemini-1.5-flash-latest");
+        const geminiModel = env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
+        assertPhaseModel("outline", geminiModel);
 
         const workflowId = `wf_${Date.now()}_${crypto.randomUUID().split("-")[0]}`;
         const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
@@ -750,7 +761,7 @@ export default {
 
         try {
           const prompt = buildOutlinePrompt(brief);
-          const outline = await geminiGenerate(env.GEMINI_API_KEY, prompt, "workflow/outline");
+          const outline = await geminiGenerate(env.GEMINI_API_KEY, prompt, "workflow/outline", geminiModel);
           await store.setPhaseOutput(workflowId, "outline", { outline });
           await store.addLog(workflowId, "outline", "phase_completed");
           await store.complete(workflowId);
@@ -797,7 +808,8 @@ export default {
 
         await quota.consumeTokens(3000, "workflow/draft");
         // Enforce role separation: draft phase must use the registered model
-        assertPhaseModel("draft", "gemini-1.5-flash-latest");
+        const geminiModel = env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL;
+        assertPhaseModel("draft", geminiModel);
 
         const workflowId = `wf_${Date.now()}_${crypto.randomUUID().split("-")[0]}`;
         const store = new WorkflowStore(env.BLOG_WORKFLOW_STATE);
@@ -806,7 +818,7 @@ export default {
 
         try {
           const prompt = buildDraftPrompt(brief, String(body.outline));
-          const draft = await geminiGenerate(env.GEMINI_API_KEY, prompt, "workflow/draft");
+          const draft = await geminiGenerate(env.GEMINI_API_KEY, prompt, "workflow/draft", geminiModel);
           await store.setPhaseOutput(workflowId, "draft", { draft });
           await store.addLog(workflowId, "draft", "phase_completed");
           await store.complete(workflowId);
@@ -862,7 +874,7 @@ export default {
         let researchOutput: unknown = null;
 
         try {
-          assertPhaseModel("research", "gemini-1.5-flash-latest");
+          assertPhaseModel("research", env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL);
           const researchPrompt =
             `You are a blog research assistant. Return a JSON object (no markdown fences) with the following keys:\n` +
             `"topic": the research topic,\n` +
@@ -871,7 +883,7 @@ export default {
             `"suggestedHeadings": an array of 4-6 H2 headings for a blog post,\n` +
             `"sources": an array of up to 5 suggested reference source titles.\n` +
             `Topic: ${brief.topic}`;
-          const raw = await geminiGenerate(env.GEMINI_API_KEY, researchPrompt, "workflow/execute/research");
+          const raw = await geminiGenerate(env.GEMINI_API_KEY, researchPrompt, "workflow/execute/research", env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL);
           try {
             researchOutput = JSON.parse(raw);
           } catch {
@@ -900,9 +912,9 @@ export default {
         if (!researchFailed) {
           await store.addLog(workflowId, "outline", "phase_started", { topic: brief.topic });
           try {
-            assertPhaseModel("outline", "gemini-1.5-flash-latest");
+            assertPhaseModel("outline", env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL);
             const outlinePrompt = buildOutlinePrompt(brief);
-            outlineText = await geminiGenerate(env.GEMINI_API_KEY, outlinePrompt, "workflow/execute/outline");
+            outlineText = await geminiGenerate(env.GEMINI_API_KEY, outlinePrompt, "workflow/execute/outline", env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL);
             await store.setPhaseOutput(workflowId, "outline", { outline: outlineText });
             await store.addLog(workflowId, "outline", "phase_completed");
           } catch (err) {
@@ -926,9 +938,9 @@ export default {
         if (!researchFailed && !outlineFailed) {
           await store.addLog(workflowId, "draft", "phase_started", { topic: brief.topic });
           try {
-            assertPhaseModel("draft", "gemini-1.5-flash-latest");
+            assertPhaseModel("draft", env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL);
             const draftPrompt = buildDraftPrompt(brief, outlineText);
-            draftText = await geminiGenerate(env.GEMINI_API_KEY, draftPrompt, "workflow/execute/draft");
+            draftText = await geminiGenerate(env.GEMINI_API_KEY, draftPrompt, "workflow/execute/draft", env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL);
             await store.setPhaseOutput(workflowId, "draft", { draft: draftText });
             await store.addLog(workflowId, "draft", "phase_completed");
           } catch (err) {

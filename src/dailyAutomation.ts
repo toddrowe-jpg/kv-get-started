@@ -17,7 +17,7 @@
  *   7. Sends a WhatsApp admin notification using the "new_draft_created" template.
  */
 
-import { geminiGenerate } from "./gemini";
+import { geminiGenerate, GEMINI_DEFAULT_MODEL } from "./gemini";
 import {
   wpPublishPost,
   wpUploadMedia,
@@ -308,6 +308,11 @@ async function sendDraftNotification(
 
 export interface DailyAutomationEnv {
   GEMINI_API_KEY?: string;
+  /**
+   * Optional Gemini model override. Defaults to {@link GEMINI_DEFAULT_MODEL}.
+   * Set via: npx wrangler secret put GEMINI_MODEL
+   */
+  GEMINI_MODEL?: string;
   AI?: { run(model: string, input: unknown): Promise<unknown> };
   BLOG_WORKFLOW_STATE: KVNamespace;
   WP_SITE_URL?: string;
@@ -365,7 +370,7 @@ export async function runDailyAutomation(
   const contentPrompt = buildDailyDraftPrompt(item, brandConfig);
   let generated: GeneratedContent;
   try {
-    const rawJson = await geminiGenerate(env.GEMINI_API_KEY, contentPrompt, "daily-automation");
+    const rawJson = await geminiGenerate(env.GEMINI_API_KEY, contentPrompt, "daily-automation", env.GEMINI_MODEL ?? GEMINI_DEFAULT_MODEL);
     // Strip optional markdown code fences
     const cleaned = rawJson.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
     generated = JSON.parse(cleaned) as GeneratedContent;

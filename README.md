@@ -24,6 +24,7 @@ All API and model credentials **must** be stored as Cloudflare Worker secrets an
 | Secret name | Required | Description |
 |---|---|---|
 | `GEMINI_API_KEY` | Yes (for `/gemini/*`) | Google Gemini API key |
+| `GEMINI_MODEL` | Optional | Gemini model to use (default: `gemini-2.0-flash`) |
 | `API_KEY` | Recommended | Bearer token for general endpoint authentication |
 | `ADMIN_API_KEY` | Recommended | Separate Bearer token for `/admin/*` endpoints (Zero Trust) |
 | `CF_ACCESS_AUD` | Optional | Cloudflare Access audience tag for Zero Trust JWT enforcement |
@@ -40,6 +41,16 @@ npx wrangler secret put GEMINI_API_KEY
 ```
 
 You will be prompted to enter the key value. The secret is stored securely in Cloudflare and is never logged or exposed in responses.
+
+### `GEMINI_MODEL`
+Optional. Overrides the Gemini model used for all content-generation calls. Defaults to `gemini-2.0-flash` when not set. The value must be a model identifier supported by the Gemini `generateContent` API (e.g. `gemini-2.0-flash`, `gemini-1.5-pro`).
+
+> **Note:** If you change `GEMINI_MODEL` to a value other than the default, update the `PHASE_MODEL_REGISTRY` in `src/agentRegistry.ts` to keep the phase–model enforcement in sync. The Worker will return a `500 PhaseModelMismatchError` if the two values diverge.
+
+```bash
+npx wrangler secret put GEMINI_MODEL
+# Enter the model name, e.g.: gemini-2.0-flash
+```
 
 ### `API_KEY`
 Enables Bearer token authentication for all endpoints. Without this secret the Worker operates in **open mode** (all requests are allowed), which is suitable only for local development.

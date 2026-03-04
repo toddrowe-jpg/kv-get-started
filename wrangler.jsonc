@@ -31,6 +31,7 @@
 	// Do NOT commit real values here.
 	"vars": {
 		"GEMINI_API_KEY": "",
+		"GEMINI_MODEL": "",
 		"API_KEY": "",
 		"ADMIN_API_KEY": "",
 		"CF_ACCESS_AUD": "",

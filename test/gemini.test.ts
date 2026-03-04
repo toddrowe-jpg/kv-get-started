@@ -3,6 +3,8 @@ import {
   GeminiApiError,
   parseGeminiError,
   geminiGenerate,
+  GEMINI_DEFAULT_MODEL,
+  buildGeminiUrl,
 } from "../src/gemini";
 
 // ---------------------------------------------------------------------------
@@ -78,6 +80,41 @@ describe("GeminiApiError", () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe("GeminiApiError");
     expect(err.httpStatus).toBe(502);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GEMINI_DEFAULT_MODEL and buildGeminiUrl – unit tests
+// ---------------------------------------------------------------------------
+
+describe("GEMINI_DEFAULT_MODEL", () => {
+  it("is a non-empty string", () => {
+    expect(typeof GEMINI_DEFAULT_MODEL).toBe("string");
+    expect(GEMINI_DEFAULT_MODEL.length).toBeGreaterThan(0);
+  });
+
+  it("does not reference the deprecated gemini-1.5-flash-latest model", () => {
+    expect(GEMINI_DEFAULT_MODEL).not.toBe("gemini-1.5-flash-latest");
+  });
+});
+
+describe("buildGeminiUrl", () => {
+  it("builds a URL containing the supplied model name", () => {
+    const url = buildGeminiUrl("gemini-2.0-flash");
+    expect(url).toContain("gemini-2.0-flash");
+    expect(url).toContain(":generateContent");
+    expect(url).toMatch(/^https:\/\/generativelanguage\.googleapis\.com\//);
+  });
+
+  it("uses the default model when called with GEMINI_DEFAULT_MODEL", () => {
+    const url = buildGeminiUrl(GEMINI_DEFAULT_MODEL);
+    expect(url).toContain(GEMINI_DEFAULT_MODEL);
+  });
+
+  it("accepts a custom model override", () => {
+    const url = buildGeminiUrl("gemini-1.5-pro");
+    expect(url).toContain("gemini-1.5-pro");
+    expect(url).not.toContain("gemini-2.0-flash");
   });
 });
 
@@ -204,5 +241,27 @@ describe("geminiGenerate", () => {
     await expect(geminiGenerate("key", "prompt", "research")).rejects.toBeInstanceOf(
       GeminiApiError,
     );
+  });
+
+  it("uses GEMINI_DEFAULT_MODEL as the default model in the fetch URL", async () => {
+    let capturedUrl: string | URL | Request = "";
+    globalThis.fetch = vi.fn().mockImplementation((url: string | URL | Request) => {
+      capturedUrl = url;
+      return Promise.resolve(mockResponse(successBody, 200));
+    });
+    await geminiGenerate("key", "prompt");
+    expect(String(capturedUrl)).toContain(GEMINI_DEFAULT_MODEL);
+    expect(String(capturedUrl)).toContain(":generateContent");
+  });
+
+  it("uses a custom model when supplied as the fourth argument", async () => {
+    let capturedUrl: string | URL | Request = "";
+    globalThis.fetch = vi.fn().mockImplementation((url: string | URL | Request) => {
+      capturedUrl = url;
+      return Promise.resolve(mockResponse(successBody, 200));
+    });
+    await geminiGenerate("key", "prompt", undefined, "gemini-1.5-pro");
+    expect(String(capturedUrl)).toContain("gemini-1.5-pro");
+    expect(String(capturedUrl)).not.toContain(GEMINI_DEFAULT_MODEL);
   });
 });

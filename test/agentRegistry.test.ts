@@ -6,6 +6,7 @@ import {
   getPhaseModel,
   WorkflowPhase,
 } from "../src/agentRegistry";
+import { GEMINI_DEFAULT_MODEL } from "../src/gemini";
 
 // ---------------------------------------------------------------------------
 // PHASE_MODEL_REGISTRY – structure tests
@@ -42,10 +43,10 @@ describe("PHASE_MODEL_REGISTRY", () => {
     }
   });
 
-  it("Gemini phases use gemini-1.5-flash-latest", () => {
+  it("Gemini phases use the default Gemini model", () => {
     const geminiPhases: WorkflowPhase[] = ["research", "outline", "draft", "edit", "factcheck"];
     for (const phase of geminiPhases) {
-      expect(PHASE_MODEL_REGISTRY[phase].model).toBe("gemini-1.5-flash-latest");
+      expect(PHASE_MODEL_REGISTRY[phase].model).toBe(GEMINI_DEFAULT_MODEL);
     }
   });
 
@@ -68,7 +69,7 @@ describe("PHASE_MODEL_REGISTRY", () => {
 
 describe("getPhaseModel", () => {
   it("returns the correct model for a known phase", () => {
-    expect(getPhaseModel("research")).toBe("gemini-1.5-flash-latest");
+    expect(getPhaseModel("research")).toBe(GEMINI_DEFAULT_MODEL);
     expect(getPhaseModel("image")).toBe("@cf/black-forest-labs/flux-1-schnell");
     expect(getPhaseModel("summarize")).toBe("@cf/facebook/bart-large-cnn");
   });
@@ -81,7 +82,7 @@ describe("getPhaseModel", () => {
 describe("assertPhaseModel", () => {
   it("does not throw when the correct model is supplied", () => {
     expect(() =>
-      assertPhaseModel("research", "gemini-1.5-flash-latest")
+      assertPhaseModel("research", GEMINI_DEFAULT_MODEL)
     ).not.toThrow();
   });
 
@@ -106,10 +107,10 @@ describe("assertPhaseModel", () => {
     }
     expect(caught).not.toBeNull();
     expect(caught!.phase).toBe("draft");
-    expect(caught!.expectedModel).toBe("gemini-1.5-flash-latest");
+    expect(caught!.expectedModel).toBe(GEMINI_DEFAULT_MODEL);
     expect(caught!.actualModel).toBe("wrong-model");
     expect(caught!.message).toContain("draft");
-    expect(caught!.message).toContain("gemini-1.5-flash-latest");
+    expect(caught!.message).toContain(GEMINI_DEFAULT_MODEL);
     expect(caught!.message).toContain("wrong-model");
   });
 

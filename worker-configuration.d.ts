@@ -8,6 +8,7 @@ declare namespace Cloudflare {
 		USER_NOTIFICATION: KVNamespace;
 		BLOG_WORKFLOW_STATE: KVNamespace;
 		GEMINI_API_KEY: string;
+		GEMINI_MODEL?: string;
 		API_KEY: string;
 		ADMIN_API_KEY: string;
 		CF_ACCESS_AUD: string;

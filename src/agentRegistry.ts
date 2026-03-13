@@ -36,27 +36,27 @@ export interface PhaseConfig {
 export const PHASE_MODEL_REGISTRY: Readonly<Record<WorkflowPhase, PhaseConfig>> = {
   research: {
     phase: "research",
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     description: "Blog topic research via Google Gemini",
   },
   outline: {
     phase: "outline",
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     description: "Blog outline generation via Google Gemini",
   },
   draft: {
     phase: "draft",
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     description: "Full blog draft writing via Google Gemini",
   },
   edit: {
     phase: "edit",
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     description: "Blog draft editing via Google Gemini",
   },
   factcheck: {
     phase: "factcheck",
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     description: "Fact-checking against sources via Google Gemini",
   },
   image: {

@@ -105,7 +105,7 @@ export function parseGeminiError(
  * Default Gemini model used when the `GEMINI_MODEL` environment variable is
  * not set.  Choose a model that is stable and supported in the `v1beta` API.
  */
-export const GEMINI_DEFAULT_MODEL = "gemini-2.0-flash";
+export const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
 
 const GEMINI_API_BASE =
   "https://generativelanguage.googleapis.com/v1beta/models";
